@@ -406,6 +406,8 @@ def main() -> None:
     start_epoch = 0
     max_train_steps = training_cfg.get("max_train_steps")
     max_val_steps = training_cfg.get("max_val_steps")
+    max_epochs_this_run = training_cfg.get("max_epochs_this_run")
+    epochs_completed_this_run = 0
 
     split_manifest = copy.deepcopy(train_dataset.split_manifest)
     data_provenance = {
@@ -614,6 +616,11 @@ def main() -> None:
                     archive=bool(export_cfg.get("archive", True)),
                 )
                 print(f"[eval_bundle] {exported}")
+
+        epochs_completed_this_run += 1
+        if max_epochs_this_run is not None and epochs_completed_this_run >= int(max_epochs_this_run):
+            print(f"RUN_EPOCH_LIMIT_REACHED epochs_completed={epochs_completed_this_run}")
+            break
 
     if best_model_state is None:
         raise RuntimeError("Training finished without producing a checkpoint")
