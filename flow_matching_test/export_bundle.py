@@ -150,6 +150,11 @@ def export_eval_bundle(
     (out_dir / "config.yaml").write_text(
         yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
     )
+    if checkpoint.get("split_manifest"):
+        (out_dir / "data_split.json").write_text(
+            json.dumps(checkpoint["split_manifest"], ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
     rollout_environment_spec = checkpoint["config"].get("deployment", {}).get(
         "eval_bundle", {}
     ).get("rollout_environment", {})
@@ -175,9 +180,12 @@ def export_eval_bundle(
         encoding="utf-8",
     )
 
+    bundle_files = ["ckpt.pt", "norm_stats.json", "config.yaml", "README.md"]
+    if (out_dir / "data_split.json").exists():
+        bundle_files.append("data_split.json")
     manifest["files"] = {
         name: {"sha256": _sha256(out_dir / name), "bytes": (out_dir / name).stat().st_size}
-        for name in ("ckpt.pt", "norm_stats.json", "config.yaml", "README.md")
+        for name in bundle_files
     }
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

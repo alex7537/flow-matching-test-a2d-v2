@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import math
+import os
 import platform
 import random
 import sys
@@ -94,6 +96,8 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
         allow_duplicate_episodes=bool(data_cfg.get("allow_duplicate_episodes", False)),
         range_eps=float(data_cfg.get("range_eps", 1.0e-4)),
         norm_stats=str(data_cfg.get("norm_stats", "norm_stats.json")),
+        dataset_manifest=data_cfg.get("dataset_manifest"),
+        split_manifest=data_cfg.get("split_manifest"),
     )
     return A2DProcessedWindowDataset(cfg=cfg, split=split)
 
@@ -125,6 +129,37 @@ def _sample_normalized_actions(model: RGBConditionedFlowModel, batch: dict[str, 
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _atomic_torch_save(payload: dict[str, Any], path: Path) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    torch.save(payload, temporary)
+    temporary.replace(path)
+
+
+def _rng_state() -> dict[str, Any]:
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+    }
+
+
+def _restore_rng_state(state: dict[str, Any]) -> None:
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"])
+    if torch.cuda.is_available() and state.get("torch_cuda"):
+        torch.cuda.set_rng_state_all(state["torch_cuda"])
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for block in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _format_template(template: str, *, timestamp: str, config_name: str, run_name: str) -> str:
@@ -362,15 +397,102 @@ def main() -> None:
     log_path = output_dir / "metrics.jsonl"
     summary_path = output_dir / "summary.json"
     experiment_index_path = output_dir.parent / "experiment_results.jsonl"
+    resume_events_path = output_dir / "resume_events.jsonl"
     best_val = float("inf")
     best_model_state = None
     best_metrics: dict[str, Any] | None = None
     last_metrics: dict[str, Any] | None = None
     global_step = 0
+    start_epoch = 0
     max_train_steps = training_cfg.get("max_train_steps")
     max_val_steps = training_cfg.get("max_val_steps")
 
-    for epoch in range(int(training_cfg.get("num_epochs", 50))):
+    split_manifest = copy.deepcopy(train_dataset.split_manifest)
+    data_provenance = {
+        "stats_digest": train_dataset.stats["train_episode_digest"],
+        "segmentation_version": SEGMENTATION_VERSION,
+        "segmentation_motion_threshold": float(data_cfg.get("motion_threshold", 1.0e-4)),
+        "segmentation_keyframe_threshold": float(data_cfg.get("transition_threshold", 0.1)),
+        "dataset_manifest_sha256": split_manifest.get("dataset_manifest_sha256"),
+        "split_manifest_sha256": split_manifest.get("split_manifest_sha256"),
+    }
+
+    def checkpoint_payload(model_state: dict[str, Any], epoch: int) -> dict[str, Any]:
+        return {
+            "model_state_dict": model_state,
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "config": cfg,
+            "global_step": global_step,
+            "epoch": epoch,
+            "best_val": best_val,
+            "best_metrics": best_metrics,
+            "last_metrics": last_metrics,
+            "best_model_state_dict": best_model_state,
+            "rng_state": _rng_state(),
+            "action_mean": train_dataset.action_mean,
+            "action_std": train_dataset.action_std,
+            "normalizer": copy.deepcopy(train_dataset.stats),
+            "stats_digest": train_dataset.stats["train_episode_digest"],
+            "split_manifest": split_manifest,
+            "data_provenance": data_provenance,
+            "training_environment": _runtime_environment(),
+            "model_schema": {
+                "obs_keys": list(data_cfg.get("image_keys", []))
+                + (["proprio"] if model_cfg.get("use_proprio", True) else []),
+                "action_keys": ["arm2_pos", "hand2_pos"],
+            },
+            "model_spec": {
+                "obs_horizon": train_dataset.history_steps,
+                "action_dim": train_dataset.action_dim,
+                "action_horizon": train_dataset.action_horizon,
+                "action_layout": [
+                    {"name": "arm2_pos", "dim": 7},
+                    {"name": "hand2_pos", "dim": 6},
+                ],
+            },
+            "adapter_metadata": {
+                "dataset": "A2DProcessedWindowDataset",
+                "action_semantics": "executed_joint_position",
+            },
+            "inference_spec": {
+                "schema_version": 1,
+                "image_keys": list(data_cfg.get("image_keys", [])),
+                "use_proprio": bool(model_cfg.get("use_proprio", True)),
+                "num_inference_steps": int(model_cfg.get("num_inference_steps", 40)),
+            },
+        }
+
+    resume_from = training_cfg.get("resume_from")
+    if resume_from:
+        resume_path = Path(str(resume_from)).expanduser().resolve()
+        checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        checkpoint_provenance = checkpoint.get("data_provenance", {})
+        for key in ("stats_digest", "dataset_manifest_sha256", "split_manifest_sha256"):
+            if checkpoint_provenance.get(key) != data_provenance.get(key):
+                raise ValueError(f"resume checkpoint {key} does not match the current dataset")
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        global_step = int(checkpoint["global_step"])
+        start_epoch = int(checkpoint["epoch"]) + 1
+        best_val = float(checkpoint.get("best_val", float("inf")))
+        best_metrics = copy.deepcopy(checkpoint.get("best_metrics"))
+        last_metrics = copy.deepcopy(checkpoint.get("last_metrics"))
+        best_model_state = copy.deepcopy(checkpoint.get("best_model_state_dict"))
+        _restore_rng_state(checkpoint["rng_state"])
+        resume_event = {
+            "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "checkpoint": str(resume_path),
+            "checkpoint_sha256": _sha256(resume_path),
+            "resume_from_epoch": int(checkpoint["epoch"]),
+            "resume_from_global_step": global_step,
+            "new_process_id": os.getpid(),
+        }
+        _append_jsonl(resume_events_path, resume_event)
+        print("RESUME_OK " + json.dumps(resume_event, ensure_ascii=False))
+
+    for epoch in range(start_epoch, int(training_cfg.get("num_epochs", 50))):
         model.train()
         epoch_losses: list[float] = []
         epoch_flow: list[float] = []
@@ -463,50 +585,18 @@ def main() -> None:
                 pred_action=sample_prediction.action,
             )
 
-        if metrics["val_loss"] < best_val:
+        improved = metrics["val_loss"] < best_val
+        if improved:
             best_val = metrics["val_loss"]
             best_metrics = copy.deepcopy(metrics)
             best_model_state = copy.deepcopy(model.state_dict())
+
+        latest_payload = checkpoint_payload(model.state_dict(), epoch)
+        _atomic_torch_save(latest_payload, output_dir / "latest.ckpt")
+
+        if improved:
             checkpoint_path = output_dir / "best.ckpt"
-            torch.save(
-                {
-                    "model_state_dict": best_model_state,
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "scheduler_state_dict": scheduler.state_dict(),
-                    "config": cfg,
-                    "global_step": global_step,
-                    "epoch": epoch,
-                    "action_mean": train_dataset.action_mean,
-                    "action_std": train_dataset.action_std,
-                    "normalizer": copy.deepcopy(train_dataset.stats),
-                    "stats_digest": train_dataset.stats["train_episode_digest"],
-                    "data_provenance": {
-                        "stats_digest": train_dataset.stats["train_episode_digest"],
-                        "segmentation_version": SEGMENTATION_VERSION,
-                        "segmentation_motion_threshold": float(data_cfg.get("motion_threshold", 1.0e-4)),
-                        "segmentation_keyframe_threshold": float(data_cfg.get("transition_threshold", 0.1)),
-                    },
-                    "training_environment": _runtime_environment(),
-                    "model_schema": {
-                        "obs_keys": list(data_cfg.get("image_keys", [])) + (["proprio"] if model_cfg.get("use_proprio", True) else []),
-                        "action_keys": ["arm2_pos", "hand2_pos"],
-                    },
-                    "model_spec": {
-                        "obs_horizon": train_dataset.history_steps,
-                        "action_dim": train_dataset.action_dim,
-                        "action_horizon": train_dataset.action_horizon,
-                        "action_layout": [{"name": "arm2_pos", "dim": 7}, {"name": "hand2_pos", "dim": 6}],
-                    },
-                    "adapter_metadata": {"dataset": "A2DProcessedWindowDataset", "action_semantics": "executed_joint_position"},
-                    "inference_spec": {
-                        "schema_version": 1,
-                        "image_keys": list(data_cfg.get("image_keys", [])),
-                        "use_proprio": bool(model_cfg.get("use_proprio", True)),
-                        "num_inference_steps": int(model_cfg.get("num_inference_steps", 40)),
-                    },
-                },
-                checkpoint_path,
-            )
+            _atomic_torch_save(checkpoint_payload(best_model_state, epoch), checkpoint_path)
             export_cfg = cfg.get("deployment", {}).get("eval_bundle", {})
             if bool(export_cfg.get("enabled", False)):
                 bundle_dir = output_dir / "eval_bundles" / f"eval_bundle_{run_name}_step{global_step}"

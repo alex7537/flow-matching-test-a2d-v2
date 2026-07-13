@@ -90,6 +90,8 @@ class A2DConfig:
     # cache/stats files (written inside data_dir's parent)
     index_cache: str = "index_cache.json"
     norm_stats: str = "norm_stats.json"
+    dataset_manifest: str | None = None
+    split_manifest: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -220,6 +222,64 @@ def split_episodes(episodes: list[dict], val_ratio: float, seed: int):
     train = [e for i, e in enumerate(episodes) if i not in val_ids]
     val = [e for i, e in enumerate(episodes) if i in val_ids]
     return train, val
+
+
+def split_episodes_from_manifest(
+    cfg: A2DConfig,
+    episodes: list[dict],
+) -> tuple[list[dict], list[dict], dict]:
+    if not cfg.dataset_manifest or not cfg.split_manifest:
+        train, val = split_episodes(episodes, cfg.val_ratio, cfg.seed)
+        return train, val, {}
+
+    data_dir = Path(cfg.data_dir)
+    dataset_path = data_dir / cfg.dataset_manifest
+    split_path = data_dir / cfg.split_manifest
+    dataset_bytes = dataset_path.read_bytes()
+    dataset_manifest = json.loads(dataset_bytes)
+    split_manifest = json.loads(split_path.read_text(encoding="utf-8"))
+
+    actual_dataset_sha = hashlib.sha256(dataset_bytes).hexdigest()
+    expected_dataset_sha = str(split_manifest.get("dataset_manifest_sha256", ""))
+    if actual_dataset_sha != expected_dataset_sha:
+        raise ValueError(
+            "split manifest does not match the current dataset manifest: "
+            f"expected {expected_dataset_sha}, actual {actual_dataset_sha}"
+        )
+    if int(split_manifest.get("seed", -1)) != int(cfg.seed):
+        raise ValueError("split manifest seed does not match the data config")
+    if not np.isclose(split_manifest.get("val_ratio", np.nan), cfg.val_ratio):
+        raise ValueError("split manifest val_ratio does not match the data config")
+
+    episodes_by_name = {str(episode["file_name"]): episode for episode in episodes}
+    manifest_episodes = dataset_manifest.get("episodes", [])
+    manifest_by_name = {
+        str(item["file_name"]): item
+        for item in manifest_episodes
+        if isinstance(item, dict) and "file_name" in item
+    }
+    if set(manifest_by_name) != set(episodes_by_name):
+        raise ValueError("dataset manifest episode membership does not match the current dataset")
+    for name, episode in episodes_by_name.items():
+        item = manifest_by_name[name]
+        if str(item.get("content_hash", "")) != str(episode["content_hash"]):
+            raise ValueError(f"dataset manifest content hash mismatch for {name}")
+
+    train_names = [str(name) for name in split_manifest.get("train_episodes", [])]
+    val_names = [str(name) for name in split_manifest.get("val_episodes", [])]
+    if len(train_names) != len(set(train_names)) or len(val_names) != len(set(val_names)):
+        raise ValueError("split manifest contains duplicate episode names")
+    if set(train_names).intersection(val_names):
+        raise ValueError("split manifest train/val membership overlaps")
+    if set(train_names).union(val_names) != set(episodes_by_name):
+        raise ValueError("split manifest membership does not match the current dataset")
+
+    split_manifest["split_manifest_sha256"] = hashlib.sha256(
+        split_path.read_bytes()
+    ).hexdigest()
+    train = [episodes_by_name[name] for name in train_names]
+    val = [episodes_by_name[name] for name in val_names]
+    return train, val, split_manifest
 
 
 def train_episode_binding(episodes: list[dict]) -> tuple[list[str], str]:
@@ -480,7 +540,7 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
         if split not in {"train", "val"}:
             raise ValueError(f"unsupported split: {split}")
         episodes = build_index(cfg)
-        train_eps, val_eps = split_episodes(episodes, cfg.val_ratio, cfg.seed)
+        train_eps, val_eps, split_manifest = split_episodes_from_manifest(cfg, episodes)
         stats = load_norm_stats(cfg, train_eps)
         stats.setdefault("range_eps", float(cfg.range_eps))
         for field in ("state", "action"):
@@ -491,6 +551,7 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
             raise ValueError("norm_stats.json must use executed_joint_position semantics")
         selected = train_eps if split == "train" else val_eps
         super().__init__(cfg, selected, stats, train=split == "train")
+        self.split_manifest = split_manifest
 
         # The current model has no padding-mask input, so expose only complete chunks.
         self.samples = [
