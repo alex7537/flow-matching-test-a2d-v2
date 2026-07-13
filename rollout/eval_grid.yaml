@@ -1,0 +1,73 @@
+protocol_version: 1
+object: target
+checkpoint_selection: val_loss
+
+# These paths are intentionally machine-specific. Fill them after placing the
+# calibrated scene under assets/sim; the harness refuses to run with blanks.
+sim:
+  scene_usd: ""
+  robot_prim_path: ""
+  object_prim_path: ""
+  eef_prim_path: ""
+  object_z_m: 0.0
+  camera_prim_paths:
+    rgb_head: ""
+    rgb_right_hand: ""
+  # Seven arm DOFs followed by the six active hand DOFs recorded in HDF5.
+  # Use the RuiYan Mimic asset so the other five hand joints follow its mimic rules.
+  articulation_joint_order: [joint_arm2_link_1, joint_arm2_link_2, joint_arm2_link_3, joint_arm2_link_4, joint_arm2_link_5, joint_arm2_link_6, joint_arm2_link_7, hand2_joint_link_1_1, hand2_joint_link_2_1, hand2_joint_link_3_1, hand2_joint_link_4_1, hand2_joint_link_5_1, hand2_joint_link_1_2]
+  contact_sensor_prim_paths: []
+  initial_joint_positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  # Fill from the actual USD/material configuration before the first scored rollout.
+  physics_snapshot:
+    solver_position_iterations: null
+    solver_velocity_iterations: null
+    object_mass_kg: null
+    static_friction: null
+    dynamic_friction: null
+
+primary_xy_interpolation:
+  description: Fixed in-distribution 5x5 XY grid using the 5th-95th percentile training coverage.
+  x_m: [0.757829, 0.806168, 0.854508, 0.902847, 0.951187]
+  y_m: [-0.202758, -0.152288, -0.101817, -0.051346, -0.000875]
+  orientation: canonical_stable_pose
+  yaw_offset_deg: 0.0
+  sampling_seeds: [11, 23, 37, 53]
+  expected_rollouts: 100
+  metric_group: in_distribution
+
+sparse_boundary_reference:
+  description: Exploratory full-range grid reported separately from the primary metric.
+  x_m: [0.630303, 0.745259, 0.860215, 0.975170, 1.090126]
+  y_m: [-0.284236, -0.182895, -0.081554, 0.019786, 0.121127]
+  orientation: canonical_stable_pose
+  yaw_offset_deg: 0.0
+  sampling_seeds: [11, 23]
+  expected_rollouts: 50
+  metric_group: sparse_region_reference
+
+yaw_sweep:
+  description: Orientation generalization at the center of the primary XY range.
+  x_m: 0.854508
+  y_m: -0.101817
+  orientation: canonical_stable_pose
+  yaw_offset_deg: [-135, -90, -45, 0, 45, 90, 135, 180]
+  sampling_seeds: [11, 23, 37, 53]
+  expected_rollouts: 32
+  metric_group: orientation_generalization
+
+execution:
+  observation_keys: [rgb_head, rgb_right_hand, proprio]
+  replan: after_execute_horizon
+  physics_dt_s: 0.008333333333333333
+  render_dt_s: 0.03333333333333333
+  timing_status: deployment_assumption_unverified_no_dataset_timestamps
+  max_chunks: 16
+
+success_criteria:
+  approach_distance_m: 0.08
+  approach_rotation_deg: 45.0
+  close_contact_count: 2
+  close_hold_steps: 3
+  lift_height_m: 0.025
+  lift_hold_steps: 5

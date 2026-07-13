@@ -1,0 +1,11 @@
+# The base image supplies torch==2.4.1+cu121 and torchvision==0.19.1+cu121.
+# Install this file only from the project venv created with --system-site-packages.
+timm==0.9.16
+h5py
+PyYAML==6.0.2
+matplotlib
+wandb
+rerun-sdk==0.30.0
+opencv-python-headless
+scipy
+pytest==7.4.4

@@ -1,0 +1,252 @@
+# Flow Matching Test
+
+这是一个基于处理后 A2D HDF5 的 `RGB condition -> flow matching -> joint chunk` 训练骨架。
+
+当前仓库只保留一条主线：
+
+- 条件输入是可配置 RGB 视角子集；可用视角为 `rgb_head`、`rgb_left_hand`、`rgb_right_hand`，训练时通过 `data.image_keys` 选择一路、两路或三路
+- 监督目标默认是绝对 joint target；需要 delta 时必须配套计算 delta stats
+- 模型输出未来一段 joint action chunk
+
+RGB encoder 现在支持两种后端：
+
+- `cnn`：当前仓库自带的最小共享 CNN，便于本地 smoke test
+- `timm`：更贴近 `fan_dev` 的视觉路线，可切到 `vit_small_r26_s32_224`
+
+## 唯一数据主线
+
+仓库不再支持“旧 HDF5 + 外部 JPEG 目录”。唯一输入链路是：
+
+```text
+原始新 HDF5（trajectory/cameras/rgb_* 内嵌 RGB）
+  -> scripts/preprocess_a2d.py
+处理后 HDF5（observations/rgb_* 为逐帧 JPEG，含 qpos/action/phase）
+  -> flow_matching_test.a2d_dataset --compute-stats
+index_cache.json + norm_stats.json
+  -> flow_matching_test.train
+```
+
+原始文件中的 state/action 映射为：
+
+- state：`arm2_pos(7) + hand2_pos(6)`
+- action：`arm2_pos(7) + hand2_pos(6)`
+
+action 固定为 13 维实际执行关节位置，归一化统计使用 train episodes 的逐维 min/max；稀疏的 `*_pos_target` 不参与训练标签。
+
+模型条件输入默认包含配置选中的 RGB spatial tokens 和归一化 13 维 proprio state token。
+
+先执行预处理（示例选择两路相机）：
+
+```bash
+python3 scripts/preprocess_a2d.py \
+  --src /path/to/new_raw_hdf5/success \
+  --dst /path/to/a2d_processed \
+  --image-keys rgb_head rgb_right_hand \
+  --image-size 224 --jpeg-quality 92 --workers 4
+```
+
+再建立索引和归一化统计：
+
+```bash
+python3 -m flow_matching_test.a2d_dataset \
+  --data-dir /path/to/a2d_processed \
+  --image-keys rgb_head rgb_right_hand \
+  --compute-stats --rebuild-index
+```
+
+如果你要更贴近 `fan_dev`，推荐用 `timm` 后端，并把 `timm_model_name` 设为
+`vit_small_r26_s32_224`。
+
+## `timm` 最小检查
+
+如果你想先确认环境是否支持 `vit_small_r26_s32_224`，推荐按这 3 步做：
+
+1. 安装 `timm`
+
+```bash
+pip install timm
+```
+
+2. 先只检查模型名是否存在
+
+```bash
+python3 -m flow_matching_test.check_timm_env \
+  --model-name vit_small_r26_s32_224 \
+  --list-only
+```
+
+3. 再检查能否真正实例化和前向
+
+```bash
+python3 -m flow_matching_test.check_timm_env \
+  --model-name vit_small_r26_s32_224 \
+  --pretrained
+```
+
+如果第 3 步能通过，基本说明：
+
+- 当前环境里已经有 `timm`
+- 这个模型名在当前 `timm` 版本中可用
+- 预训练权重可以下载或从缓存中加载
+- 该 backbone 至少能完成一次最小前向
+
+## 模型主链路
+
+```text
+selected RGB views -> encoder token map -> ObsComposer -> obs tokens
+noisy action chunk + time embedding -> action tokens
+action self-attn + cross-attn to obs tokens
+predict velocity
+MSE(pred_velocity, target_velocity)
+```
+
+loss 目前只有一个：
+
+- 标准 flow matching velocity MSE
+- 训练时间参数采用 `t ~ Uniform(time_eps, 1.0)` 的 straight-line CFM
+
+## 启动训练
+
+最小 `cnn` 版本：
+
+```bash
+cd /home/psibot/Downloads/flow-matching-test
+python3 -m flow_matching_test.train \
+  --config configs/minimal_rgb_flow.yaml \
+  data.data_dir=/path/to/a2d_processed
+```
+
+`timm` 版本：
+
+```bash
+python3 -m flow_matching_test.train \
+  --config configs/minimal_rgb_flow_timm.yaml \
+  data.data_dir=/path/to/a2d_processed
+```
+
+如果你想把训练过程同步写成 `rerun` 的 `.rrd`：
+
+```bash
+python3 -m flow_matching_test.train \
+  --config configs/minimal_rgb_flow.yaml \
+  data.data_dir=/path/to/a2d_processed \
+  visualization.rerun.enabled=true
+```
+
+当前最小 `rerun` 链路会记录：
+
+- 每个 epoch 的训练/验证标量
+- 一条 sample 的所选 RGB 输入
+- 这条 sample 的 GT / Pred action chunk
+- 归一化动作空间与反归一化动作空间下的 action 曲线
+
+默认输出到当前 run 目录下的 `training.rrd`。
+
+如果你想把训练指标同步打到 `wandb`：
+
+```bash
+wandb login <YOUR_WANDB_API_KEY>
+
+python3 -m flow_matching_test.train \
+  --config configs/minimal_rgb_flow.yaml \
+  data.data_dir=/path/to/a2d_processed \
+  logging.wandb.enabled=true
+```
+
+当前最小 `wandb` 链路会记录：
+
+- 每个 epoch 的 `train_loss / train_flow_loss / train_t_mean`
+- `train_sample_action_mse / val_loss / val_sample_action_mse`
+- 本次 run 的配置与最终 summary
+
+如果只是本地先试，不想真的上传远端，可以这样：
+
+```bash
+python3 -m flow_matching_test.train \
+  --config configs/minimal_rgb_flow.yaml \
+  data.data_dir=/path/to/a2d_processed \
+  logging.wandb.enabled=true \
+  logging.wandb.mode=offline
+```
+
+常用 smoke test：
+
+```bash
+python3 -m flow_matching_test.train \
+  --config configs/cpu_smoke.yaml \
+  data.data_dir=/path/to/a2d_processed \
+  training.output_dir=/tmp/a2d_cpu_smoke
+```
+
+`cpu_smoke.yaml` 使用 CNN、两路 64×64 RGB、batch size 2、2 epochs；每个 epoch
+只运行 2 个 train batch 和 1 个 val batch。它只验证数据、前后向、指标和 checkpoint
+链路，不能用于判断模型是否收敛。
+
+如果你已经有了 `best.ckpt`，也可以像 `fan_dev` 那样单独导出 checkpoint eval 的 `.rrd`：
+
+```bash
+python3 -m flow_matching_test.export_rerun_eval \
+  --ckpt /path/to/best.ckpt \
+  --split val \
+  --num-samples 8
+```
+
+这个脚本会：
+
+- 重新加载 checkpoint 和配置
+- 在 `train` 或 `val` split 上取若干条 sample
+- 导出 RGB + GT/Pred action 的 `.rrd`
+- 旁边再写一个同名 `.json` summary
+
+## 文件说明
+
+- `flow_matching_test/a2d_dataset.py`：处理后 HDF5 Dataset、切分、归一化与模型输入适配
+- `scripts/preprocess_a2d.py`：原始内嵌 RGB HDF5 转换为训练格式
+- `docs/DATA_PIPELINE.md`：完整数据管线与验证协议
+- `flow_matching_test/model.py`：最小 RGB-conditioned flow matching 模型，支持 `cnn` / `timm` 两种 encoder
+- `flow_matching_test/observation.py`：最小 observation 模块，负责 encoder / concat / obs composer
+- `flow_matching_test/check_timm_env.py`：检查 `timm` 环境、模型名和预训练权重是否可用
+- `flow_matching_test/rerun_logger.py`：最小 `rerun` 训练/评估可视化封装
+- `flow_matching_test/wandb_logger.py`：最小 `wandb` 实验日志封装
+- `flow_matching_test/export_rerun_eval.py`：加载 `best.ckpt` 并导出 checkpoint eval `.rrd`
+- `flow_matching_test/train.py`：训练循环、验证和 checkpoint
+- `flow_matching_test/export_bundle.py`：将 checkpoint 导出为带哈希校验的 rollout bundle
+- `rollout/`：Isaac Sim 4.5 固定网格 rollout、三阶段判据与结果汇总
+- `configs/minimal_rgb_flow.yaml`：`cnn` 版配置
+- `configs/minimal_rgb_flow_timm.yaml`：`timm` 版配置
+
+## Rollout bundle 与 Isaac Sim
+
+手工导出一个 bundle：
+
+```bash
+python3 -m flow_matching_test.export_bundle \
+  --ckpt /path/to/best.ckpt \
+  --out /path/to/eval_bundle_fm_step50k \
+  --execute-horizon 8 \
+  --data-version DATA_VERSION \
+  --archive
+```
+
+也可以将训练配置中的 `deployment.eval_bundle.enabled` 改为 `true`，每次出现新的
+best checkpoint 时会自动生成 `eval_bundles/eval_bundle_<run>_step<step>.tgz`。
+
+在 4090 的 Isaac Sim 容器中运行：
+
+```bash
+/isaac-sim/python.sh rollout/run_rollout.py \
+  --bundle /workspace/bundles/eval_bundle_fm_step50k \
+  --grid rollout/eval_grid.yaml \
+  --out /workspace/results/fm_step50k
+
+/isaac-sim/python.sh rollout/report.py --in /workspace/results/fm_step50k
+```
+
+首次运行前必须在 `rollout/eval_grid.yaml:sim` 填入已校准场景 USD、机器人/物体/
+末端/相机 prim path、13 个实际 articulation DOF 名称以及至少两个接触传感器路径。
+当前数据的 action 顺序是右臂 7 个主动关节，加右手 6 个主动关节：
+`1_1, 2_1, 3_1, 4_1, 5_1, 1_2`。本机已有
+`/home/psibot/Downloads/InspiredHand_RuiYan/RuiYan_Hand_Right_Mimic.usd`；应使用该
+Mimic 资产，让另外 5 个手部关节按资产内规则联动：拇指 `1_3 = 1.675 * 1_2`，
+其余四指的远端关节与对应近端关节保持 `1.0` 倍。rollout 只下发上述 6 个主动
+手部 DOF，不应再额外拟合或重复下发 11 个手部 DOF。

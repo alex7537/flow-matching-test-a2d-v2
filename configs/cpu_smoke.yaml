@@ -1,0 +1,82 @@
+data:
+  data_dir: /path/to/a2d_processed
+  image_keys: [rgb_head, rgb_right_hand]
+  image_size: 64
+  val_ratio: 0.1
+  history_steps: 1
+  action_horizon: 4
+  transition_oversample_factor: 2
+  transition_threshold: 0.1
+  motion_threshold: 1.0e-4
+  norm_stats: norm_stats.json
+  allow_duplicate_episodes: true  # only for the one-episode engineering smoke fixture
+  range_eps: 1.0e-4
+  aug_brightness: 0.2
+  aug_contrast: 0.4
+  aug_saturation: 0.2
+  aug_hue: 0.05
+
+model:
+  encoder_type: cnn
+  use_proprio: true
+  d_model: 64
+  n_head: 4
+  n_layer: 2
+  dropout: 0.0
+  time_eps: 1.0e-3
+  num_inference_steps: 2
+
+training:
+  seed: 42
+  device: cpu
+  batch_size: 2
+  num_workers: 0
+  pin_memory: false
+  lr: 1.0e-4
+  backbone_lr_multiplier: 1.0
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+  warmup_steps: 1
+  num_epochs: 2
+  max_train_steps: 2
+  max_val_steps: 1
+  output_dir: /home/psibot/Downloads/flow-matching-test/outputs/cpu_smoke_{timestamp}
+
+logging:
+  wandb:
+    enabled: false
+    mode: disabled
+    project: flow-matching-test
+    entity: null
+    run_name: null
+    group: null
+    job_type: smoke
+    tags: [smoke, cpu, rgb, flow-matching]
+
+visualization:
+  rerun:
+    enabled: false
+    spawn: false
+    save_path: "cpu_smoke.rrd"
+    sample_source: val
+    sample_every_n_epochs: 1
+
+deployment:
+  eval_bundle:
+    enabled: false
+    execute_horizon: 2
+    archive: true
+    data_version: smoke
+    action_range_guard_margin_ratio: 0.1
+    rollout_environment:
+      isaac_sim_version: null
+      physics_dt_s: 0.008333333333333333
+      render_dt_s: 0.03333333333333333
+      solver_position_iterations: null
+      solver_velocity_iterations: null
+      object_mass_kg: null
+      static_friction: null
+      dynamic_friction: null
+    camera_resolutions: {}
+    joint_order: [joint_arm2_link_1, joint_arm2_link_2, joint_arm2_link_3, joint_arm2_link_4, joint_arm2_link_5, joint_arm2_link_6, joint_arm2_link_7, hand2_joint_link_1_1, hand2_joint_link_2_1, hand2_joint_link_3_1, hand2_joint_link_4_1, hand2_joint_link_5_1, hand2_joint_link_1_2]

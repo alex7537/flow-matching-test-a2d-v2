@@ -1,0 +1,71 @@
+protocol_version: 1
+object: target
+checkpoint_selection: val_loss
+calibration_data_version: pending_350gb_audit
+lift_protocol_decision:
+  complete_ratio_gt_0_70: autonomous_lift_filter_truncated
+  complete_ratio_lt_0_30: external_lift_uniform_truncation
+  otherwise: autonomous_lift_with_truncated_prefix_only_after_mask_support
+
+primary_xy_interpolation:
+  description: Fixed in-distribution 5x5 XY grid using the 5th-95th percentile training coverage.
+  x_m: [0.757829, 0.806168, 0.854508, 0.902847, 0.951187]
+  y_m: [-0.202758, -0.152288, -0.101817, -0.051346, -0.000875]
+  orientation: canonical_stable_pose
+  yaw_offset_deg: 0.0
+  sampling_seeds: [11, 23, 37, 53]
+  expected_rollouts: 100
+  metric_group: in_distribution
+  overlay_training_density: true
+
+sparse_boundary_reference:
+  description: Exploratory full-range grid reported separately from the primary interpolation metric.
+  x_m: [0.630303, 0.745259, 0.860215, 0.975170, 1.090126]
+  y_m: [-0.284236, -0.182895, -0.081554, 0.019786, 0.121127]
+  orientation: canonical_stable_pose
+  yaw_offset_deg: 0.0
+  sampling_seeds: [11, 23]
+  expected_rollouts: 50
+  metric_group: sparse_region_reference
+  overlay_training_density: true
+
+yaw_sweep:
+  description: Orientation generalization at the center of the primary XY range.
+  x_m: 0.854508
+  y_m: -0.101817
+  orientation: canonical_stable_pose
+  yaw_offset_deg: [-135, -90, -45, 0, 45, 90, 135, 180]
+  sampling_seeds: [11, 23, 37, 53]
+  expected_rollouts: 32
+  metric_group: orientation_generalization
+  training_yaw_coverage_deg: [-180, 180]
+
+execution:
+  observation_keys: [rgb_head, rgb_right_hand, proprio]
+  replan: after_full_chunk
+  max_chunks: 16
+  arm_execution: match_collection_controller_semantics
+  hand_execution: per_frame_position_target
+  policy_capability: pending_lift_recording_protocol_resolution
+  external_lift_for_truncated_recordings:
+    condition: hand_joint_speed_below_threshold_for_consecutive_frames
+    joint_speed_l2_threshold_rad: 0.01
+    consecutive_frames: 5
+    lift_command: replay_collection_lift_target_sequence
+
+success_criteria:
+  approach:
+    metric: grasp_pose_position_and_rotation_error
+    thresholds: to_be_calibrated_from_successful_training_episodes
+  close:
+    metric: hand_closed_with_stable_object_contact
+  lift:
+    metric: object_height_gain_and_no_drop
+    execution_source: pending_autonomous_vs_external_lift_contract
+    min_height_gain_m: 0.025
+
+failure_labels: [approach, close, lift, timeout, simulator_error]
+reporting:
+  primary_metric: rollout_success_rate
+  separate_metric_groups: true
+  outputs: [per_pose_success_rate, failure_stage_counts, xy_heatmap, training_density_heatmap, yaw_curve]
