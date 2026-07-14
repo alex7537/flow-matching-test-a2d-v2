@@ -40,6 +40,8 @@
 
 ## 2. 管线架构
 
+> **W&B 同步纪律:**A800 仅以 `wandb==0.28.0` offline 落盘,不配置密钥、不执行任何交互式 W&B 命令;offline run 搬运到 psibot 后,使用 `requirements.lock.wandb-sync.txt` 固定的 `wandb==0.27.0` 上传,并以 `scripts/verify_wandb_sync.py` 的服务端 run 存在性及 history 行数校验作为唯一成功判据。
+
 ```
 原始 success/*.hdf5  (100–200 GB, chunk 布局对随机读极不友好)
         │
