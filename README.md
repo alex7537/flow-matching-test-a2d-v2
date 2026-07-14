@@ -35,6 +35,20 @@ action 固定为 13 维实际执行关节位置，归一化统计使用 train ep
 
 模型条件输入默认包含配置选中的 RGB spatial tokens 和归一化 13 维 proprio state token。
 
+## Policy 对比实验
+
+训练器与具体策略已解耦，配置通过 `policy.type` 选择策略；当前实现为：
+
+```yaml
+policy:
+  type: flow_matching
+```
+
+策略实现放在 `flow_matching_test/policies/`。新增 DP、IMLE 等实验时，各自实现
+`ActionPolicy.compute_loss()` 与 `sample_actions()`，并在 factory 注册新的
+`policy.type`；训练循环统一负责 `loss.backward()`、optimizer、checkpoint 和日志，
+无需为每种 loss 复制一份 trainer。当前只实现了 `flow_matching`，DP/IMLE 尚未实现。
+
 先执行预处理（示例选择两路相机）：
 
 ```bash
@@ -205,7 +219,8 @@ python3 -m flow_matching_test.export_rerun_eval \
 - `flow_matching_test/a2d_dataset.py`：处理后 HDF5 Dataset、切分、归一化与模型输入适配
 - `scripts/preprocess_a2d.py`：原始内嵌 RGB HDF5 转换为训练格式
 - `docs/DATA_PIPELINE.md`：完整数据管线与验证协议
-- `flow_matching_test/model.py`：最小 RGB-conditioned flow matching 模型，支持 `cnn` / `timm` 两种 encoder
+- `flow_matching_test/policies/`：统一 policy 接口、factory 与独立的 flow-matching policy 实现
+- `flow_matching_test/model.py`：旧导入路径的兼容别名，已有脚本和 checkpoint 无需迁移
 - `flow_matching_test/observation.py`：最小 observation 模块，负责 encoder / concat / obs composer
 - `flow_matching_test/check_timm_env.py`：检查 `timm` 环境、模型名和预训练权重是否可用
 - `flow_matching_test/rerun_logger.py`：最小 `rerun` 训练/评估可视化封装

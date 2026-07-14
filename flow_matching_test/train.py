@@ -10,6 +10,7 @@ import platform
 import random
 import sys
 import time
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,8 @@ from torch.utils.data import DataLoader
 
 from flow_matching_test.a2d_dataset import A2DConfig, A2DProcessedWindowDataset
 from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, _git_sha, export_eval_bundle
-from flow_matching_test.model import RGBConditionedFlowModel
+from flow_matching_test.policies.base import ActionPolicy
+from flow_matching_test.policies.factory import build_policy, resolve_policy_type
 from flow_matching_test.rerun_logger import RerunTrainVisualizer
 from flow_matching_test.segmentation import SEGMENTATION_VERSION
 from flow_matching_test.wandb_logger import WandbLogger
@@ -111,27 +113,39 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
     return A2DProcessedWindowDataset(cfg=cfg, split=split)
 
 
-def _build_model(*, model_cfg: dict[str, Any], data_cfg: dict[str, Any], train_dataset: A2DProcessedWindowDataset) -> RGBConditionedFlowModel:
-    return RGBConditionedFlowModel(
+def _build_policy(
+    *,
+    policy_cfg: dict[str, Any] | None,
+    model_cfg: dict[str, Any],
+    data_cfg: dict[str, Any],
+    train_dataset: A2DProcessedWindowDataset,
+) -> ActionPolicy:
+    return build_policy(
+        policy_cfg=policy_cfg,
+        model_cfg=model_cfg,
         image_keys=tuple(data_cfg.get("image_keys", ["rgb_head", "rgb_left_hand", "rgb_right_hand"])),
-        encoder_type=str(model_cfg.get("encoder_type", "cnn")),
-        timm_model_name=str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),
-        timm_pretrained=bool(model_cfg.get("timm_pretrained", True)),
-        timm_tokens_per_frame=int(model_cfg.get("timm_tokens_per_frame", 1)),
-        timm_token_mode=str(model_cfg.get("timm_token_mode", "spatial")),
-        use_proprio=bool(model_cfg.get("use_proprio", True)),
         action_dim=train_dataset.action_dim,
         history_steps=train_dataset.history_steps,
         action_horizon=train_dataset.action_horizon,
-        d_model=int(model_cfg.get("d_model", 128)),
-        n_head=int(model_cfg.get("n_head", 4)),
-        n_layer=int(model_cfg.get("n_layer", 4)),
-        dropout=float(model_cfg.get("dropout", 0.0)),
-        time_eps=float(model_cfg.get("time_eps", 1.0e-3)),
-        num_inference_steps=int(model_cfg.get("num_inference_steps", 40)),
     )
 
-def _sample_normalized_actions(model: RGBConditionedFlowModel, batch: dict[str, Any]) -> torch.Tensor:
+
+def _build_model(
+    *,
+    model_cfg: dict[str, Any],
+    data_cfg: dict[str, Any],
+    train_dataset: A2DProcessedWindowDataset,
+) -> ActionPolicy:
+    """Backward-compatible helper for existing scripts and old configs."""
+    return _build_policy(
+        policy_cfg={"type": "flow_matching"},
+        model_cfg=model_cfg,
+        data_cfg=data_cfg,
+        train_dataset=train_dataset,
+    )
+
+
+def _sample_normalized_actions(model: ActionPolicy, batch: dict[str, Any]) -> torch.Tensor:
     return model.sample_actions(batch["obs"]).action_normalized
 
 
@@ -282,16 +296,14 @@ def _build_wandb_logger(
 @torch.no_grad()
 def evaluate(
     *,
-    model: RGBConditionedFlowModel,
+    model: ActionPolicy,
     loader: DataLoader,
     device: torch.device,
     max_steps: int | None = None,
 ) -> dict[str, float]:
     model.eval()
     losses: list[float] = []
-    segmented_losses: dict[str, list[float]] = {
-        "static_loss": [], "continuous_loss": [], "keyframe_loss": []
-    }
+    component_values: dict[str, list[float]] = defaultdict(list)
     sample_mse: list[float] = []
     for step_idx, batch in enumerate(loader):
         if max_steps is not None and step_idx >= max_steps:
@@ -299,17 +311,16 @@ def evaluate(
         batch = _to_device(batch, device)
         loss, components = model.compute_loss(batch)
         losses.append(float(loss.detach().item()))
-        for name in segmented_losses:
-            if components[name] is not None:
-                segmented_losses[name].append(components[name])
+        for name, value in components.items():
+            if value is not None:
+                component_values[name].append(float(value))
         sampled = _sample_normalized_actions(model, batch)
         sample_mse.append(float(torch.mean((sampled - batch["action"]) ** 2).item()))
     if not losses:
-        return {"loss": 0.0, "static_loss": None, "continuous_loss": None, "keyframe_loss": None,
-                "sample_action_mse": 0.0}
+        return {"loss": 0.0, "sample_action_mse": 0.0}
     return {
         "loss": float(np.mean(losses)),
-        **{name: float(np.mean(values)) if values else None for name, values in segmented_losses.items()},
+        **{name: float(np.mean(values)) for name, values in component_values.items()},
         "sample_action_mse": float(np.mean(sample_mse)),
     }
 
@@ -324,6 +335,10 @@ def main() -> None:
     training_cfg = cfg["training"]
     data_cfg = cfg["data"]
     model_cfg = cfg["model"]
+    policy_cfg = copy.deepcopy(cfg.get("policy", {"type": "flow_matching"}))
+    policy_type = resolve_policy_type(policy_cfg)
+    policy_cfg["type"] = policy_type
+    cfg["policy"] = policy_cfg
     started_at = time.time()
 
     seed = int(training_cfg.get("seed", 42))
@@ -366,23 +381,21 @@ def main() -> None:
         pin_memory=bool(training_cfg.get("pin_memory", False)),
     )
 
-    model = _build_model(model_cfg=model_cfg, data_cfg=data_cfg, train_dataset=train_dataset).to(device)
+    model = _build_policy(
+        policy_cfg=policy_cfg,
+        model_cfg=model_cfg,
+        data_cfg=data_cfg,
+        train_dataset=train_dataset,
+    ).to(device)
     stats = train_dataset.export_stats()
     model.set_action_stats(action_mean=stats["action_mean"].to(device), action_std=stats["action_std"].to(device))
 
     base_lr = float(training_cfg.get("lr", 1.0e-4))
     backbone_lr_multiplier = float(training_cfg.get("backbone_lr_multiplier", 1.0))
-    backbone_params = []
-    head_params = []
-    for name, parameter in model.named_parameters():
-        if "obs_composer.encoders.0.backbone" in name:
-            backbone_params.append(parameter)
-        else:
-            head_params.append(parameter)
-    parameter_groups = [
-        {"params": head_params, "lr": base_lr},
-        {"params": backbone_params, "lr": base_lr * backbone_lr_multiplier},
-    ]
+    parameter_groups, head_params, backbone_params = model.optimizer_parameter_groups(
+        base_lr=base_lr,
+        backbone_lr_multiplier=backbone_lr_multiplier,
+    )
     optimizer = torch.optim.AdamW(
         parameter_groups,
         lr=base_lr,
@@ -446,6 +459,8 @@ def main() -> None:
     def checkpoint_payload(model_state: dict[str, Any], epoch: int) -> dict[str, Any]:
         return {
             "model_state_dict": model_state,
+            "policy_type": policy_type,
+            "policy_spec": {"type": policy_type},
             "optimizer_state_dict": optimizer.state_dict(),
             "scheduler_state_dict": scheduler.state_dict(),
             "config": cfg,
@@ -469,6 +484,7 @@ def main() -> None:
                 "action_keys": ["arm2_pos", "hand2_pos"],
             },
             "model_spec": {
+                "policy_type": policy_type,
                 "obs_horizon": train_dataset.history_steps,
                 "action_dim": train_dataset.action_dim,
                 "action_horizon": train_dataset.action_horizon,
@@ -493,6 +509,14 @@ def main() -> None:
     if resume_from:
         resume_path = Path(str(resume_from)).expanduser().resolve()
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
+        checkpoint_policy_type = resolve_policy_type(
+            checkpoint.get("policy_spec", {"type": checkpoint.get("policy_type", "flow_matching")})
+        )
+        if checkpoint_policy_type != policy_type:
+            raise ValueError(
+                f"resume checkpoint policy_type={checkpoint_policy_type!r} does not match "
+                f"current policy_type={policy_type!r}"
+            )
         checkpoint_provenance = checkpoint.get("data_provenance", {})
         for key in ("stats_digest", "dataset_manifest_sha256", "split_manifest_sha256"):
             if checkpoint_provenance.get(key) != data_provenance.get(key):
@@ -521,11 +545,7 @@ def main() -> None:
     for epoch in range(start_epoch, int(training_cfg.get("num_epochs", 50))):
         model.train()
         epoch_losses: list[float] = []
-        epoch_flow: list[float] = []
-        epoch_t: list[float] = []
-        epoch_segments: dict[str, list[float]] = {
-            "static_loss": [], "continuous_loss": [], "keyframe_loss": []
-        }
+        epoch_components: dict[str, list[float]] = defaultdict(list)
         epoch_grad_norm_head: list[float] = []
         epoch_grad_norm_backbone: list[float] = []
 
@@ -544,11 +564,9 @@ def main() -> None:
             scheduler.step()
 
             epoch_losses.append(float(loss.detach().item()))
-            epoch_flow.append(float(components["flow_loss"]))
-            epoch_t.append(float(components["t_mean"]))
-            for name in epoch_segments:
-                if components[name] is not None:
-                    epoch_segments[name].append(float(components[name]))
+            for name, value in components.items():
+                if value is not None:
+                    epoch_components[name].append(float(value))
             global_step += 1
 
         val_metrics = evaluate(
@@ -567,11 +585,9 @@ def main() -> None:
             "epoch": epoch,
             "global_step": global_step,
             "train_loss": float(np.mean(epoch_losses)) if epoch_losses else 0.0,
-            "train_flow_loss": float(np.mean(epoch_flow)) if epoch_flow else 0.0,
-            "train_t_mean": float(np.mean(epoch_t)) if epoch_t else 0.0,
             **{
                 f"train_{name}": float(np.mean(values)) if values else None
-                for name, values in epoch_segments.items()
+                for name, values in epoch_components.items()
             },
             "train_sample_action_mse": train_sample_mse,
             "head_lr": float(optimizer.param_groups[0]["lr"]),
@@ -581,9 +597,11 @@ def main() -> None:
             "grad_norm_backbone_mean": float(np.mean(epoch_grad_norm_backbone)),
             "grad_norm_backbone_max": float(np.max(epoch_grad_norm_backbone)),
             "val_loss": float(val_metrics["loss"]),
-            "val_static_loss": val_metrics["static_loss"],
-            "val_continuous_loss": val_metrics["continuous_loss"],
-            "val_keyframe_loss": val_metrics["keyframe_loss"],
+            **{
+                f"val_{name}": value
+                for name, value in val_metrics.items()
+                if name not in {"loss", "sample_action_mse"}
+            },
             "val_sample_action_mse": float(val_metrics["sample_action_mse"]),
         }
         last_metrics = copy.deepcopy(metrics)
@@ -679,6 +697,7 @@ def main() -> None:
         "action_dim": train_dataset.action_dim,
         "history_steps": train_dataset.history_steps,
         "action_horizon": train_dataset.action_horizon,
+        "policy_type": policy_type,
         "encoder_type": str(model_cfg.get("encoder_type", "cnn")),
         "timm_model_name": str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),
         "timm_pretrained": bool(model_cfg.get("timm_pretrained", True)),

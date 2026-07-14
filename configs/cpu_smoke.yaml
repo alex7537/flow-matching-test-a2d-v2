@@ -16,6 +16,9 @@ data:
   aug_saturation: 0.2
   aug_hue: 0.05
 
+policy:
+  type: flow_matching
+
 model:
   encoder_type: cnn
   use_proprio: true

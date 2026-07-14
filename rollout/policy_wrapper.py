@@ -32,6 +32,9 @@ class Policy:
         self.cfg = yaml.safe_load((self.bundle_dir / "config.yaml").read_text())
         self.stats = json.loads((self.bundle_dir / "norm_stats.json").read_text())
         self.manifest = json.loads((self.bundle_dir / "manifest.json").read_text())
+        policy_type = str(self.cfg.get("policy", {}).get("type", "flow_matching"))
+        if policy_type != "flow_matching":
+            raise ValueError(f"rollout does not support policy.type={policy_type!r}")
         self._validate_bundle()
         self.device = torch.device(device)
         self.model = self._build_model().to(self.device)

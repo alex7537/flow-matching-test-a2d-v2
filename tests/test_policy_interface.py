@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+import pytest
+import torch
+
+from flow_matching_test.model import RGBConditionedFlowModel
+from flow_matching_test.policies.factory import build_policy, resolve_policy_type
+from flow_matching_test.policies.flow_matching import FlowMatchingPolicy
+
+
+def _policy() -> FlowMatchingPolicy:
+    return build_policy(
+        policy_cfg={"type": "flow_matching"},
+        model_cfg={
+            "encoder_type": "cnn",
+            "use_proprio": True,
+            "d_model": 16,
+            "n_head": 4,
+            "n_layer": 1,
+            "dropout": 0.0,
+            "time_eps": 1.0e-3,
+            "num_inference_steps": 2,
+        },
+        image_keys=("rgb_head", "rgb_right_hand"),
+        action_dim=13,
+        history_steps=1,
+        action_horizon=4,
+    )
+
+
+def _batch() -> dict[str, object]:
+    return {
+        "obs": {
+            "rgb_head": torch.randn(2, 1, 3, 32, 32),
+            "rgb_right_hand": torch.randn(2, 1, 3, 32, 32),
+            "proprio": torch.randn(2, 13),
+        },
+        "action": torch.randn(2, 4, 13),
+        "segment_type": torch.tensor([1, 2]),
+    }
+
+
+def test_policy_factory_and_aliases() -> None:
+    assert resolve_policy_type(None) == "flow_matching"
+    assert resolve_policy_type({"type": "cfm"}) == "flow_matching"
+    assert isinstance(_policy(), FlowMatchingPolicy)
+    with pytest.raises(ValueError, match="Unsupported policy.type='dp'"):
+        resolve_policy_type({"type": "dp"})
+
+
+def test_policy_loss_backprop_sampling_and_parameter_groups() -> None:
+    policy = _policy()
+    batch = _batch()
+    loss, metrics = policy.compute_loss(batch)
+    loss.backward()
+
+    assert loss.ndim == 0
+    assert metrics["flow_loss"] > 0.0
+    assert any(parameter.grad is not None for parameter in policy.parameters())
+
+    groups, head, backbone = policy.optimizer_parameter_groups(
+        base_lr=1.0e-4,
+        backbone_lr_multiplier=0.1,
+    )
+    grouped_ids = [id(parameter) for group in groups for parameter in group["params"]]
+    assert len(grouped_ids) == len(set(grouped_ids)) == len(list(policy.parameters()))
+    assert len(head) + len(backbone) == len(list(policy.parameters()))
+    assert groups[0]["lr"] == pytest.approx(1.0e-4)
+    assert groups[1]["lr"] == pytest.approx(1.0e-5)
+
+    sampled = policy.sample_actions(batch["obs"])
+    assert sampled.action_normalized.shape == (2, 4, 13)
+    assert sampled.action.shape == (2, 4, 13)
+
+
+def test_legacy_model_import_and_state_dict_remain_compatible() -> None:
+    assert RGBConditionedFlowModel is FlowMatchingPolicy
+    source = _policy()
+    target = _policy()
+    target.load_state_dict(source.state_dict(), strict=True)

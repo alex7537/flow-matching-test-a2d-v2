@@ -55,6 +55,16 @@ def _inference_config(
     model_cfg = train_cfg["model"]
     image_keys = list(data_cfg["image_keys"])
     bundle_cfg = train_cfg.get("deployment", {}).get("eval_bundle", {})
+    policy_type = str(
+        checkpoint.get(
+            "policy_type",
+            train_cfg.get("policy", {}).get("type", "flow_matching"),
+        )
+    ).strip().lower()
+    if policy_type in {"cfm", "flow"}:
+        policy_type = "flow_matching"
+    if policy_type != "flow_matching":
+        raise ValueError(f"rollout bundle export does not support policy_type={policy_type!r}")
     chunk_size = int(data_cfg["action_horizon"])
     if not 1 <= execute_horizon <= chunk_size:
         raise ValueError(f"execute_horizon must be in [1,{chunk_size}]")
@@ -69,6 +79,7 @@ def _inference_config(
 
     return {
         "schema_version": 2,
+        "policy": {"type": policy_type},
         "model": {
             "encoder_type": str(model_cfg.get("encoder_type", "cnn")),
             "timm_model_name": str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),
@@ -160,6 +171,7 @@ def export_eval_bundle(
     ).get("rollout_environment", {})
     manifest = {
         "schema_version": 2,
+        "policy_type": config["policy"]["type"],
         "git_sha": _git_sha(Path(__file__).resolve().parents[1]),
         "data_version": data_version,
         "train_step": int(checkpoint.get("global_step", -1)),
