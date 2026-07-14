@@ -46,7 +46,7 @@ training:
 logging:
   wandb:
     enabled: false
-    mode: online
+    mode: offline
     project: flow-matching-test
     entity: null
     run_name: null

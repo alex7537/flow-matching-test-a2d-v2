@@ -20,7 +20,7 @@ import yaml
 from torch.utils.data import DataLoader
 
 from flow_matching_test.a2d_dataset import A2DConfig, A2DProcessedWindowDataset
-from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, export_eval_bundle
+from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, _git_sha, export_eval_bundle
 from flow_matching_test.model import RGBConditionedFlowModel
 from flow_matching_test.rerun_logger import RerunTrainVisualizer
 from flow_matching_test.segmentation import SEGMENTATION_VERSION
@@ -56,6 +56,15 @@ def _to_device(batch: Any, device: torch.device) -> Any:
     if isinstance(batch, dict):
         return {key: _to_device(value, device) for key, value in batch.items()}
     return batch
+
+
+def _grad_l2_norm(parameters: list[torch.nn.Parameter]) -> float:
+    squared = 0.0
+    for parameter in parameters:
+        if parameter.grad is not None:
+            norm = parameter.grad.detach().float().norm(2)
+            squared += float(norm.item()) ** 2
+    return math.sqrt(squared)
 
 
 def _runtime_environment() -> dict[str, Any]:
@@ -249,22 +258,23 @@ def _build_wandb_logger(
         project=wandb_cfg.get("project"),
         entity=wandb_cfg.get("entity"),
         run_name=str(wandb_cfg.get("run_name", run_name)),
-        mode=str(wandb_cfg.get("mode", "online")),
+        mode=str(wandb_cfg.get("mode", "offline")),
         tags=[str(item) for item in wandb_cfg.get("tags", [])],
         group=wandb_cfg.get("group"),
         job_type=wandb_cfg.get("job_type", "train"),
         config=cfg,
     )
+    run_url = logger.run_url
     resolved = {
         "enabled": bool(logger.enabled),
         "project": wandb_cfg.get("project"),
         "entity": wandb_cfg.get("entity"),
         "run_name": str(wandb_cfg.get("run_name", run_name)),
-        "mode": str(wandb_cfg.get("mode", "online")),
+        "mode": logger.mode,
         "tags": [str(item) for item in wandb_cfg.get("tags", [])],
         "group": wandb_cfg.get("group"),
         "job_type": wandb_cfg.get("job_type", "train"),
-        "run_url": logger.run_url,
+        "run_url": run_url,
     }
     return logger, resolved
 
@@ -334,8 +344,6 @@ def main() -> None:
         output_dir=output_dir,
         run_name=run_name,
     )
-    wandb_logger, wandb_info = _build_wandb_logger(cfg, output_dir=output_dir, run_name=run_name)
-
     device = torch.device(str(training_cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu")))
     train_dataset = _build_dataset(data_cfg=data_cfg, split="train", seed=seed)
     val_dataset = _build_dataset(data_cfg=data_cfg, split="val", seed=seed)
@@ -418,6 +426,22 @@ def main() -> None:
         "dataset_manifest_sha256": split_manifest.get("dataset_manifest_sha256"),
         "split_manifest_sha256": split_manifest.get("split_manifest_sha256"),
     }
+    wandb_config = copy.deepcopy(cfg)
+    wandb_config["provenance"] = {
+        "git_sha": _git_sha(Path(__file__).resolve().parents[1]),
+        "dataset_version": cfg.get("deployment", {}).get("eval_bundle", {}).get(
+            "data_version", "unknown"
+        ),
+        **data_provenance,
+        "split_manifest": split_manifest,
+    }
+    rng_before_wandb = _rng_state()
+    wandb_logger, wandb_info = _build_wandb_logger(
+        wandb_config,
+        output_dir=output_dir,
+        run_name=run_name,
+    )
+    _restore_rng_state(rng_before_wandb)
 
     def checkpoint_payload(model_state: dict[str, Any], epoch: int) -> dict[str, Any]:
         return {
@@ -502,6 +526,8 @@ def main() -> None:
         epoch_segments: dict[str, list[float]] = {
             "static_loss": [], "continuous_loss": [], "keyframe_loss": []
         }
+        epoch_grad_norm_head: list[float] = []
+        epoch_grad_norm_backbone: list[float] = []
 
         for batch_idx, batch in enumerate(train_loader):
             if max_train_steps is not None and batch_idx >= int(max_train_steps):
@@ -510,6 +536,8 @@ def main() -> None:
             loss, components = model.compute_loss(batch)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
+            epoch_grad_norm_head.append(_grad_l2_norm(head_params))
+            epoch_grad_norm_backbone.append(_grad_l2_norm(backbone_params))
             if training_cfg.get("grad_clip") is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(training_cfg["grad_clip"]))
             optimizer.step()
@@ -546,6 +574,12 @@ def main() -> None:
                 for name, values in epoch_segments.items()
             },
             "train_sample_action_mse": train_sample_mse,
+            "head_lr": float(optimizer.param_groups[0]["lr"]),
+            "backbone_lr": float(optimizer.param_groups[1]["lr"]),
+            "grad_norm_head_mean": float(np.mean(epoch_grad_norm_head)),
+            "grad_norm_head_max": float(np.max(epoch_grad_norm_head)),
+            "grad_norm_backbone_mean": float(np.mean(epoch_grad_norm_backbone)),
+            "grad_norm_backbone_max": float(np.max(epoch_grad_norm_backbone)),
             "val_loss": float(val_metrics["loss"]),
             "val_static_loss": val_metrics["static_loss"],
             "val_continuous_loss": val_metrics["continuous_loss"],
@@ -665,6 +699,8 @@ def main() -> None:
         "time_eps": float(model_cfg.get("time_eps", 1.0e-3)),
         "rerun": rerun_info,
         "wandb": wandb_info,
+        "best_epoch": int(best_metrics["epoch"]) if best_metrics is not None else None,
+        "best_val_loss": float(best_metrics["val_loss"]) if best_metrics is not None else None,
         "best": best_metrics,
         "final": final_metrics,
     }

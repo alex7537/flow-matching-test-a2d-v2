@@ -52,8 +52,8 @@ training:
 logging:
   wandb:
     enabled: false
-    mode: online
-    project: flow-matching-test
+    mode: offline
+    project: a2d-flow-matching
     entity: null
     run_name: null
     group: null

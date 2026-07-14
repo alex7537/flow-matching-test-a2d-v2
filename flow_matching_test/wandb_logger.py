@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -34,7 +35,7 @@ class WandbLogger:
         project: str | None,
         entity: str | None,
         run_name: str,
-        mode: str = "online",
+        mode: str = "offline",
         tags: list[str] | None = None,
         group: str | None = None,
         job_type: str | None = None,
@@ -42,7 +43,7 @@ class WandbLogger:
     ) -> None:
         self.enabled = bool(enabled)
         self.run = None
-        self.mode = str(mode)
+        self.mode = os.environ.get("WANDB_MODE", str(mode))
 
         if not self.enabled:
             return
@@ -63,33 +64,58 @@ class WandbLogger:
             "config": _sanitize_config(copy.deepcopy(dict(config or {}))),
         }
         init_kwargs = {key: value for key, value in init_kwargs.items() if value is not None}
-        self.run = wandb.init(**init_kwargs)
+        try:
+            self.run = wandb.init(**init_kwargs)
+        except Exception as exc:  # pragma: no cover - depends on external service
+            self._disable("init", exc)
 
-    def log_metrics(self, metrics: Mapping[str, float], *, step: int) -> None:
+    def _disable(self, operation: str, exc: Exception) -> None:
+        if self.enabled:
+            logger.warning("wandb %s failed; disabling wandb for this run: %s", operation, exc)
+        self.enabled = False
+        self.run = None
+
+    def log_metrics(self, metrics: Mapping[str, Any], *, step: int) -> None:
         if not self.enabled or self.run is None:
             return
-        payload = {str(key): float(value) for key, value in metrics.items()}
-        wandb.log(payload, step=int(step))
+        payload = {
+            str(key): float(value)
+            for key, value in metrics.items()
+            if value is not None
+        }
+        try:
+            self.run.log(payload, step=int(step))
+        except Exception as exc:  # pragma: no cover - depends on external service
+            self._disable("log", exc)
 
     def update_summary(self, payload: Mapping[str, Any]) -> None:
         if not self.enabled or self.run is None:
             return
-        sanitized = _sanitize_config(copy.deepcopy(dict(payload)))
-        for key, value in sanitized.items():
-            self.run.summary[str(key)] = value
+        try:
+            sanitized = _sanitize_config(copy.deepcopy(dict(payload)))
+            for key, value in sanitized.items():
+                self.run.summary[str(key)] = value
+        except Exception as exc:  # pragma: no cover - depends on external service
+            self._disable("summary update", exc)
 
     def save_text(self, name: str, content: str) -> None:
         if not self.enabled or self.run is None:
             return
-        artifact_path = Path(self.run.dir) / str(name)
-        artifact_path.write_text(content, encoding="utf-8")
-        wandb.save(str(artifact_path), base_path=str(Path(self.run.dir)))
+        try:
+            artifact_path = Path(self.run.dir) / str(name)
+            artifact_path.write_text(content, encoding="utf-8")
+            self.run.save(str(artifact_path), base_path=str(Path(self.run.dir)))
+        except Exception as exc:  # pragma: no cover - depends on external service
+            self._disable("artifact save", exc)
 
     def finish(self) -> None:
         if not self.enabled or self.run is None:
             return
-        wandb.finish()
-        self.run = None
+        try:
+            self.run.finish()
+            self.run = None
+        except Exception as exc:  # pragma: no cover - depends on external service
+            self._disable("finish", exc)
 
     @property
     def run_url(self) -> str | None:
@@ -97,7 +123,8 @@ class WandbLogger:
             return None
         try:
             return str(self.run.url)
-        except Exception:
+        except Exception as exc:  # pragma: no cover - depends on external service
+            self._disable("run URL read", exc)
             return None
 
     def to_metadata(self) -> dict[str, Any]:

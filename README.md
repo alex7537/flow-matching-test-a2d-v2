@@ -147,7 +147,7 @@ python3 -m flow_matching_test.train \
 ```bash
 wandb login <YOUR_WANDB_API_KEY>
 
-python3 -m flow_matching_test.train \
+WANDB_MODE=online python3 -m flow_matching_test.train \
   --config configs/minimal_rgb_flow.yaml \
   data.data_dir=/path/to/a2d_processed \
   logging.wandb.enabled=true
@@ -155,9 +155,12 @@ python3 -m flow_matching_test.train \
 
 当前最小 `wandb` 链路会记录：
 
-- 每个 epoch 的 `train_loss / train_flow_loss / train_t_mean`
-- `train_sample_action_mse / val_loss / val_sample_action_mse`
-- 本次 run 的配置与最终 summary
+- 每个 epoch 的 train/val、static/continuous/keyframe loss 与 sample action MSE
+- head/backbone 两组学习率，以及两组梯度范数的 epoch mean/max
+- git、dataset、stats、split、segmentation provenance
+- 本次 run 的配置、`best_epoch / best_val_loss` 与最终 summary
+
+默认使用 offline 模式，W&B 异常会自动降级为 no-op，不会中断训练；短任务需要实时同步时才临时设置 `WANDB_MODE=online`。
 
 如果只是本地先试，不想真的上传远端，可以这样：
 
@@ -165,8 +168,7 @@ python3 -m flow_matching_test.train \
 python3 -m flow_matching_test.train \
   --config configs/minimal_rgb_flow.yaml \
   data.data_dir=/path/to/a2d_processed \
-  logging.wandb.enabled=true \
-  logging.wandb.mode=offline
+  logging.wandb.enabled=true
 ```
 
 常用 smoke test：
