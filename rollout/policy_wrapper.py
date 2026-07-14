@@ -14,7 +14,8 @@ import torch
 import torch.nn.functional as F
 import yaml
 
-from flow_matching_test.model import RGBConditionedFlowModel
+from flow_matching_test.policies.base import ActionPolicy
+from flow_matching_test.policies.factory import build_policy
 from flow_matching_test.segmentation import SEGMENTATION_VERSION
 
 
@@ -32,9 +33,6 @@ class Policy:
         self.cfg = yaml.safe_load((self.bundle_dir / "config.yaml").read_text())
         self.stats = json.loads((self.bundle_dir / "norm_stats.json").read_text())
         self.manifest = json.loads((self.bundle_dir / "manifest.json").read_text())
-        policy_type = str(self.cfg.get("policy", {}).get("type", "flow_matching"))
-        if policy_type != "flow_matching":
-            raise ValueError(f"rollout does not support policy.type={policy_type!r}")
         self._validate_bundle()
         self.device = torch.device(device)
         self.model = self._build_model().to(self.device)
@@ -142,26 +140,17 @@ class Policy:
             }
             raise ValueError(f"policy action exceeds train range guard: {details}")
 
-    def _build_model(self) -> RGBConditionedFlowModel:
-        model_cfg = self.cfg["model"]
-        cfm_cfg = model_cfg["cfm"]
-        return RGBConditionedFlowModel(
+    def _build_model(self) -> ActionPolicy:
+        model_cfg = dict(self.cfg["model"])
+        model_cfg.update(model_cfg.pop("cfm", {}))
+        model_cfg["timm_pretrained"] = False
+        return build_policy(
+            policy_cfg=self.cfg.get("policy", {"type": "flow_matching"}),
+            model_cfg=model_cfg,
             image_keys=tuple(camera["model_key"] for camera in self.cfg["obs"]["cameras"]),
-            encoder_type=str(model_cfg["encoder_type"]),
-            timm_model_name=str(model_cfg["timm_model_name"]),
-            timm_pretrained=False,
-            timm_tokens_per_frame=int(model_cfg["timm_tokens_per_frame"]),
-            timm_token_mode=str(model_cfg["timm_token_mode"]),
-            use_proprio=bool(model_cfg["use_proprio"]),
             history_steps=int(self.cfg["obs"]["history_steps"]),
             action_dim=int(self.cfg["action"]["dim"]),
             action_horizon=int(self.cfg["action"]["chunk_size"]),
-            d_model=int(model_cfg["d_model"]),
-            n_head=int(model_cfg["n_head"]),
-            n_layer=int(model_cfg["n_layer"]),
-            dropout=float(model_cfg["dropout"]),
-            time_eps=float(cfm_cfg["time_eps"]),
-            num_inference_steps=int(cfm_cfg["num_inference_steps"]),
         )
 
     def reset(self) -> None:

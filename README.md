@@ -44,10 +44,17 @@ policy:
   type: flow_matching
 ```
 
-策略实现放在 `flow_matching_test/policies/`。新增 DP、IMLE 等实验时，各自实现
+策略实现放在 `flow_matching_test/policies/`。新增 policy 时各自实现
 `ActionPolicy.compute_loss()` 与 `sample_actions()`，并在 factory 注册新的
 `policy.type`；训练循环统一负责 `loss.backward()`、optimizer、checkpoint 和日志，
-无需为每种 loss 复制一份 trainer。当前只实现了 `flow_matching`，DP/IMLE 尚未实现。
+无需为每种 loss 复制一份 trainer。当前支持：
+
+- `flow_matching`：连续时间速度场目标，Euler 采样
+- `imle`：与 psi-policy 对齐的 RS-IMLE 候选匹配，默认每个条件 20 个候选
+- `diffusion`：离散 cosine noise schedule 的 epsilon 预测，默认 15 步 DDIM 采样
+
+三种 policy 的 loss 数值空间不同，不应直接横向比较；正式比较使用同一数据、网络
+主体、训练步数与 seed，并以 rollout 成功率、sample action MSE 和推理延迟为准。
 
 先执行预处理（示例选择两路相机）：
 

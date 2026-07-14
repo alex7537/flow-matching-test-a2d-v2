@@ -6,11 +6,13 @@ import torch
 from flow_matching_test.model import RGBConditionedFlowModel
 from flow_matching_test.policies.factory import build_policy, resolve_policy_type
 from flow_matching_test.policies.flow_matching import FlowMatchingPolicy
+from flow_matching_test.policies.diffusion import DiffusionPolicy
+from flow_matching_test.policies.imle import ImlePolicy
 
 
-def _policy() -> FlowMatchingPolicy:
+def _policy(policy_cfg: dict[str, object] | None = None):
     return build_policy(
-        policy_cfg={"type": "flow_matching"},
+        policy_cfg=policy_cfg or {"type": "flow_matching"},
         model_cfg={
             "encoder_type": "cnn",
             "use_proprio": True,
@@ -44,8 +46,10 @@ def test_policy_factory_and_aliases() -> None:
     assert resolve_policy_type(None) == "flow_matching"
     assert resolve_policy_type({"type": "cfm"}) == "flow_matching"
     assert isinstance(_policy(), FlowMatchingPolicy)
-    with pytest.raises(ValueError, match="Unsupported policy.type='dp'"):
-        resolve_policy_type({"type": "dp"})
+    assert resolve_policy_type({"type": "dp"}) == "diffusion"
+    assert resolve_policy_type({"type": "rs_imle"}) == "imle"
+    with pytest.raises(ValueError, match="Unsupported policy.type='unknown'"):
+        resolve_policy_type({"type": "unknown"})
 
 
 def test_policy_loss_backprop_sampling_and_parameter_groups() -> None:
@@ -78,3 +82,24 @@ def test_legacy_model_import_and_state_dict_remain_compatible() -> None:
     source = _policy()
     target = _policy()
     target.load_state_dict(source.state_dict(), strict=True)
+
+
+@pytest.mark.parametrize(
+    ("policy_cfg", "expected_type", "metric_name"),
+    [
+        ({"type": "imle", "n_samples_per_condition": 3, "rs_imle_epsilon": 0.0}, ImlePolicy, "imle_loss"),
+        ({"type": "diffusion", "diffusion_train_steps": 10, "diffusion_inference_steps": 3}, DiffusionPolicy, "epsilon_loss"),
+    ],
+)
+def test_new_policy_loss_backprop_and_sampling(policy_cfg, expected_type, metric_name) -> None:
+    policy = _policy(policy_cfg)
+    assert isinstance(policy, expected_type)
+    batch = _batch()
+    loss, metrics = policy.compute_loss(batch)
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert metric_name in metrics
+    assert any(parameter.grad is not None for parameter in policy.parameters())
+    sampled = policy.sample_actions(batch["obs"])
+    assert sampled.action_normalized.shape == (2, 4, 13)
+    assert torch.isfinite(sampled.action_normalized).all()

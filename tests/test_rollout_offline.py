@@ -3,18 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 import yaml
 
 from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, export_eval_bundle
-from flow_matching_test.model import RGBConditionedFlowModel
+from flow_matching_test.policies.factory import build_policy, resolve_policy_type
 from rollout.policy_wrapper import Policy
 from rollout.report import build_report
 from rollout.run_rollout import load_trials
 from rollout.success_checker import ThreePhaseChecker
 
 
-def _checkpoint(path: Path) -> None:
+def _checkpoint(path: Path, policy_cfg: dict | None = None) -> None:
+    policy_cfg = policy_cfg or {"type": "flow_matching"}
     config = {
         "data": {
             "image_keys": ["rgb_head", "rgb_right_hand"],
@@ -33,20 +35,16 @@ def _checkpoint(path: Path) -> None:
             "num_inference_steps": 2,
         },
         "training": {"seed": 7},
+        "policy": policy_cfg,
         "deployment": {"eval_bundle": {"action_range_guard_margin_ratio": 10.0}},
     }
-    model = RGBConditionedFlowModel(
+    model = build_policy(
+        policy_cfg=policy_cfg,
+        model_cfg=config["model"],
         image_keys=("rgb_head", "rgb_right_hand"),
-        encoder_type="cnn",
-        use_proprio=True,
         history_steps=1,
         action_dim=13,
         action_horizon=4,
-        d_model=16,
-        n_head=4,
-        n_layer=1,
-        time_eps=0.001,
-        num_inference_steps=2,
     )
     stats = {
         "schema_version": 2,
@@ -60,6 +58,8 @@ def _checkpoint(path: Path) -> None:
     torch.save(
         {
             "model_state_dict": model.state_dict(),
+            "policy_type": resolve_policy_type(policy_cfg),
+            "policy_spec": {"type": resolve_policy_type(policy_cfg)},
             "config": config,
             "normalizer": stats,
             "stats_digest": "fixture-stats-digest",
@@ -95,9 +95,11 @@ def test_bundle_policy_round_trip(tmp_path: Path) -> None:
     _checkpoint(ckpt)
     export_eval_bundle(ckpt, bundle, execute_horizon=2)
     exported_config = yaml.safe_load((bundle / "config.yaml").read_text())
+    assert exported_config["policy"]["type"] == "flow_matching"
     assert exported_config["joint_order"] == DEFAULT_JOINT_ORDER
     assert (bundle / "data_split.json").exists()
     manifest = yaml.safe_load((bundle / "manifest.json").read_text())
+    assert manifest["policy_type"] == "flow_matching"
     assert "data_split.json" in manifest["files"]
     policy = Policy(bundle, device="cpu")
     obs = {
@@ -119,6 +121,33 @@ def test_bundle_policy_round_trip(tmp_path: Path) -> None:
         assert "exceeds train range guard" in str(exc)
     else:
         raise AssertionError("out-of-range policy action was accepted")
+
+
+@pytest.mark.parametrize(
+    "policy_cfg",
+    [
+        {"type": "imle", "n_samples_per_condition": 2, "rs_imle_epsilon": 0.0},
+        {"type": "diffusion", "diffusion_train_steps": 10, "diffusion_inference_steps": 3},
+    ],
+)
+def test_alternate_policy_bundle_round_trip(tmp_path: Path, policy_cfg: dict) -> None:
+    ckpt = tmp_path / "best.ckpt"
+    bundle = tmp_path / "bundle"
+    _checkpoint(ckpt, policy_cfg=policy_cfg)
+    export_eval_bundle(ckpt, bundle, execute_horizon=2)
+    policy = Policy(bundle, device="cpu")
+    policy.action_range_margin_ratio = 1.0e6  # random, untrained weights are intentionally unconstrained
+    action = policy.infer(
+        {
+            "images": {
+                "rgb_head": np.zeros((24, 40, 3), dtype=np.uint8),
+                "rgb_right_hand": np.zeros((24, 40, 3), dtype=np.uint8),
+            },
+            "proprio": np.zeros(13, dtype=np.float32),
+        }
+    )
+    assert action.shape == (4, 13)
+    assert np.isfinite(action).all()
 
 
 def test_success_checker_and_report() -> None:

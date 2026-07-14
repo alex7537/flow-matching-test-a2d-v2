@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import subprocess
@@ -55,16 +56,22 @@ def _inference_config(
     model_cfg = train_cfg["model"]
     image_keys = list(data_cfg["image_keys"])
     bundle_cfg = train_cfg.get("deployment", {}).get("eval_bundle", {})
+    policy_cfg = copy.deepcopy(train_cfg.get("policy", {}))
     policy_type = str(
         checkpoint.get(
             "policy_type",
-            train_cfg.get("policy", {}).get("type", "flow_matching"),
+            policy_cfg.get("type", "flow_matching"),
         )
     ).strip().lower()
     if policy_type in {"cfm", "flow"}:
         policy_type = "flow_matching"
-    if policy_type != "flow_matching":
-        raise ValueError(f"rollout bundle export does not support policy_type={policy_type!r}")
+    if policy_type in {"rs_imle"}:
+        policy_type = "imle"
+    if policy_type in {"dp", "diffusion_policy"}:
+        policy_type = "diffusion"
+    if policy_type not in {"flow_matching", "imle", "diffusion"}:
+        raise ValueError(f"unsupported rollout policy_type={policy_type!r}")
+    policy_cfg["type"] = policy_type
     chunk_size = int(data_cfg["action_horizon"])
     if not 1 <= execute_horizon <= chunk_size:
         raise ValueError(f"execute_horizon must be in [1,{chunk_size}]")
@@ -79,7 +86,7 @@ def _inference_config(
 
     return {
         "schema_version": 2,
-        "policy": {"type": policy_type},
+        "policy": policy_cfg,
         "model": {
             "encoder_type": str(model_cfg.get("encoder_type", "cnn")),
             "timm_model_name": str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),
@@ -187,7 +194,7 @@ def export_eval_bundle(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (out_dir / "README.md").write_text(
-        f"Flow-matching rollout bundle from `{ckpt_path.name}` at step "
+        f"{manifest['policy_type']} rollout bundle from `{ckpt_path.name}` at step "
         f"{manifest['train_step']}.\n",
         encoding="utf-8",
     )

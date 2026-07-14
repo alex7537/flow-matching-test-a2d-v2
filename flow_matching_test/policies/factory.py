@@ -4,13 +4,20 @@ from collections.abc import Mapping
 from typing import Any
 
 from flow_matching_test.policies.base import ActionPolicy
+from flow_matching_test.policies.diffusion import DiffusionPolicy
 from flow_matching_test.policies.flow_matching import FlowMatchingPolicy
+from flow_matching_test.policies.imle import ImlePolicy
 
 
 _ALIASES = {
     "cfm": "flow_matching",
     "flow": "flow_matching",
     "flow_matching": "flow_matching",
+    "diffusion": "diffusion",
+    "diffusion_policy": "diffusion",
+    "dp": "diffusion",
+    "imle": "imle",
+    "rs_imle": "imle",
 }
 
 
@@ -51,5 +58,44 @@ def build_policy(
             dropout=float(model_cfg.get("dropout", 0.0)),
             time_eps=float(model_cfg.get("time_eps", 1.0e-3)),
             num_inference_steps=int(model_cfg.get("num_inference_steps", 40)),
+        )
+    if policy_type == "imle":
+        return ImlePolicy(
+            image_keys=image_keys,
+            encoder_type=str(model_cfg.get("encoder_type", "cnn")),
+            timm_model_name=str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),
+            timm_pretrained=bool(model_cfg.get("timm_pretrained", True)),
+            timm_tokens_per_frame=int(model_cfg.get("timm_tokens_per_frame", 1)),
+            timm_token_mode=str(model_cfg.get("timm_token_mode", "spatial")),
+            use_proprio=bool(model_cfg.get("use_proprio", True)),
+            action_dim=int(action_dim),
+            history_steps=int(history_steps),
+            action_horizon=int(action_horizon),
+            d_model=int(model_cfg.get("d_model", 128)),
+            n_head=int(model_cfg.get("n_head", 4)),
+            n_layer=int(model_cfg.get("n_layer", 4)),
+            dropout=float(model_cfg.get("dropout", 0.0)),
+            n_samples_per_condition=int(policy_cfg.get("n_samples_per_condition", 20)),
+            rs_imle_epsilon=float(policy_cfg.get("rs_imle_epsilon", 0.03)),
+        )
+    if policy_type == "diffusion":
+        return DiffusionPolicy(
+            image_keys=image_keys,
+            encoder_type=str(model_cfg.get("encoder_type", "cnn")),
+            timm_model_name=str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),
+            timm_pretrained=bool(model_cfg.get("timm_pretrained", True)),
+            timm_tokens_per_frame=int(model_cfg.get("timm_tokens_per_frame", 1)),
+            timm_token_mode=str(model_cfg.get("timm_token_mode", "spatial")),
+            use_proprio=bool(model_cfg.get("use_proprio", True)),
+            action_dim=int(action_dim),
+            history_steps=int(history_steps),
+            action_horizon=int(action_horizon),
+            d_model=int(model_cfg.get("d_model", 128)),
+            n_head=int(model_cfg.get("n_head", 4)),
+            n_layer=int(model_cfg.get("n_layer", 4)),
+            dropout=float(model_cfg.get("dropout", 0.0)),
+            time_eps=float(model_cfg.get("time_eps", 1.0e-3)),
+            diffusion_train_steps=int(policy_cfg.get("diffusion_train_steps", 100)),
+            diffusion_inference_steps=int(policy_cfg.get("diffusion_inference_steps", 15)),
         )
     raise AssertionError(f"Unhandled policy type: {policy_type}")
