@@ -8,7 +8,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from flow_matching_test.train import _build_dataset, _build_model, _to_device, load_config
+from flow_matching_test.policies.factory import resolve_policy_type
+from flow_matching_test.train import _build_dataset, _build_policy, _to_device, load_config
 
 
 def main() -> None:
@@ -23,6 +24,8 @@ def main() -> None:
     data_cfg = cfg["data"]
     model_cfg = cfg["model"]
     training_cfg = cfg["training"]
+    policy_cfg = cfg.get("policy", {"type": "flow_matching"})
+    policy_type = resolve_policy_type(policy_cfg)
     seed = int(training_cfg.get("seed", 42))
     random.seed(seed)
     np.random.seed(seed)
@@ -35,7 +38,12 @@ def main() -> None:
     batch = next(iter(DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0)))
     batch = _to_device(batch, device)
 
-    model = _build_model(model_cfg=model_cfg, data_cfg=data_cfg, train_dataset=dataset).to(device)
+    model = _build_policy(
+        policy_cfg=policy_cfg,
+        model_cfg=model_cfg,
+        data_cfg=data_cfg,
+        train_dataset=dataset,
+    ).to(device)
     stats = dataset.export_stats()
     model.set_action_stats(
         action_mean=stats["action_mean"].to(device),
@@ -44,18 +52,12 @@ def main() -> None:
 
     base_lr = float(training_cfg.get("lr", 1.0e-4))
     backbone_lr_multiplier = float(training_cfg.get("backbone_lr_multiplier", 1.0))
-    backbone_params = []
-    head_params = []
-    for name, parameter in model.named_parameters():
-        if "obs_composer.encoders.0.backbone" in name:
-            backbone_params.append(parameter)
-        else:
-            head_params.append(parameter)
+    parameter_groups, _, _ = model.optimizer_parameter_groups(
+        base_lr=base_lr,
+        backbone_lr_multiplier=backbone_lr_multiplier,
+    )
     optimizer = torch.optim.AdamW(
-        [
-            {"params": head_params, "lr": base_lr},
-            {"params": backbone_params, "lr": base_lr * backbone_lr_multiplier},
-        ],
+        parameter_groups,
         lr=base_lr,
         weight_decay=float(training_cfg.get("weight_decay", 1.0e-4)),
         betas=tuple(training_cfg.get("betas", [0.9, 0.95])),
@@ -84,6 +86,7 @@ def main() -> None:
     final_loss = float(fixed_loss().detach().item())
     result = {
         "status": "PASS" if final_loss < initial_loss else "FAIL",
+        "policy_type": policy_type,
         "steps": args.steps,
         "batch_size": batch_size,
         "initial_loss": initial_loss,
