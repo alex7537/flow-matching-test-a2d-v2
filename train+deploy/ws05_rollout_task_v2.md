@@ -36,12 +36,21 @@ A800 已完成 66 条完整 lift episode 的 CFM 训练(30ep,val 健康收敛)�
 ## 阶段 0:准备
 
 ### 0.1 A800 侧(先做)
+- **已完成**:交付目录为 `/share_data/zhangyurui/flow-matching-test-a2d-v2/rollout_artifacts/level0_prep_66ep_step4674/`，
+  固定 `episode_env_000_000008_success.hdf5 / frame 0 / seed 20260715 / TF32 off`。
 - 用 **本次 bundle** 生成同 seed 参考输出:任选一条 val episode 的 frame 0,固定 seed,
   完整推理(编码→CFM 5 步 Euler→反归一化),保存 `reference_input.npz`
   (实际模型输入) + `reference_output.json`(16×13 chunk + episode/frame/seed/环境版本)。
   (旧 step460 参考输出对应 6 条模型,不可复用。)
 - 打包上传:bundle TGZ + SHA、参考输入 NPZ/输出 JSON、`requirements.lock.a800.txt`。
   通道:COS(凭据到位)或任何双方可达通道;落地后 `sha256sum` 必须等于上表值。
+
+```text
+ebe1d1eb52de01e25d8c581c357c5bd71c5f5ccb30717c7a065812579335ecd8  eval_bundle_a800_66ep_cfm_1507_best_step4674.tgz
+8b8e5c37da29de9c692ad0ca2e679c3890698da4f9409247fcbd10b1fec20e10  reference_input.npz
+ba87845c1974139274e4b4554706de83faec21483302cb6d574d6a8cd2ab60bb  reference_output.json
+b837b556084016ca3616e9fa90112bf690fc381d007698f4c58c615fd06f5475  requirements.lock.a800.txt
+```
 
 ### 0.2 ws-05 环境(推荐 Docker policy-server 架构)
 - 先确认采集管线运行形态(原生/容器)与 Isaac 场景资产位置——**这决定 Level 1~3 的 Isaac 侧形态**。
