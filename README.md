@@ -221,6 +221,23 @@ python3 -m flow_matching_test.export_rerun_eval \
 - 导出 RGB + GT/Pred action 的 `.rrd`
 - 旁边再写一个同名 `.json` summary
 
+## 协作与分支约定
+
+`main` 是唯一长期分支和可部署事实源；一切改动从最新 `main` 创建短命分支，通过 PR 审查并使用 **Squash and merge** 合并，合并后删除该分支，禁止直接 push `main`（强制分支保护待账号支持后开启）。
+
+分支名使用 `<类型>/<描述>`，例如 `fix/runbook-typo`、`report/level0`、`feat/prefix-mask`；A800、bundle manifest 和 runbook 中的 `git_sha` 始终指向已合并的 `main` commit，不使用未合并分支作为正式训练或部署基线。
+
+标准流程：
+
+```bash
+git switch main
+git pull --ff-only origin main
+git switch -c <type>/<description>
+# 修改、验证、commit
+git push -u origin <type>/<description>
+# 在 GitHub 创建 PR → review → Squash and merge → 删除远程与本地短命分支
+```
+
 ## 文件说明
 
 - `flow_matching_test/a2d_dataset.py`：处理后 HDF5 Dataset、切分、归一化与模型输入适配

@@ -4,6 +4,7 @@
 
 ## 2026-07-15｜66 条目标训练与 4090 交付封卷
 
+- `README.md` 固化 GitHub Flow 协作约定：`main` 为唯一长期且可部署的事实源，所有改动使用 `<type>/<description>` 短命分支 + PR + Squash and merge，合并后删除分支，禁止直接 push `main`；`.gitignore` 同时隔离 `模型存档/` 与 `结果-图片/`。
 - GitHub 邀请与飞书文件两条通道均已完成对 Richard 的物理交接，本方动作清零，项目转入等待 ws-05 `LEVEL0_REPORT` 至最终 6×5 rollout 矩阵的报告回流阶段。
 - `目标架构.md` 新增跨机交付原则：禁止正式交付裸 ckpt，必须使用带 bundle、参考输入/输出、环境 lock 与 SHA 清单的自包含目录，逐跳校验并通过 Level 0 同 seed 对账后才可 rollout。
 - Level 0 自包含交付目录已从 A800 完整同步至 psibot `~/rollout_handoff/level0_prep_66ep_step4674/`，TGZ、NPZ、JSON、lock 四项 `sha256sum -c SHA256SUMS` 全绿；runbook 已收口为“单目录、单次传输、单条校验”。
