@@ -142,8 +142,9 @@ def process_episode(src_path: str, dst_dir: str, size: int, quality: int,
                 raise ValueError(f"{src_path.name}: {cam} length {frames.shape[0]} != trajectory length {T}")
             jpegs[cam] = encode_frames(frames, size, quality)
 
-        success = bool(f["meta"].attrs.get("success", True))
-        object_name = str(f["meta"].attrs.get("object_name", ""))
+        meta = f.get("meta")
+        success = bool(meta.attrs.get("success", True)) if meta is not None else True
+        object_name = str(meta.attrs.get("object_name", "")) if meta is not None else ""
 
     tmp = dst_path.with_suffix(".tmp")
     with h5py.File(tmp, "w", libver="latest") as g:
