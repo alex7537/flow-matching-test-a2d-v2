@@ -227,6 +227,8 @@ python3 -m flow_matching_test.export_rerun_eval \
 
 分支名使用 `<类型>/<描述>`，例如 `fix/runbook-typo`、`report/level0`、`feat/prefix-mask`；A800、bundle manifest 和 runbook 中的 `git_sha` 始终指向已合并的 `main` commit，不使用未合并分支作为正式训练或部署基线。
 
+训练、评估与部署产物本体不进入 Git；统一登记到 `artifacts_index.md`，记录存放位置、SHA-256 与对应 `git_sha`。训练曲线保存在 W&B，交付级模型保存在自包含 bundle、A800 或 COS。
+
 标准流程：
 
 ```bash
@@ -243,6 +245,7 @@ git push -u origin <type>/<description>
 - `flow_matching_test/a2d_dataset.py`：处理后 HDF5 Dataset、切分、归一化与模型输入适配
 - `scripts/preprocess_a2d.py`：原始内嵌 RGB HDF5 转换为训练格式
 - `docs/DATA_PIPELINE.md`：完整数据管线与验证协议
+- `artifacts_index.md`：重要外部产物的位置、SHA-256 与代码血统索引
 - `flow_matching_test/policies/`：统一 policy 接口、factory 与独立的 flow-matching policy 实现
 - `flow_matching_test/model.py`：旧导入路径的兼容别名，已有脚本和 checkpoint 无需迁移
 - `flow_matching_test/observation.py`：最小 observation 模块，负责 encoder / concat / obs composer

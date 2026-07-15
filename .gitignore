@@ -12,6 +12,7 @@ data-rgb*/
 .ruff_cache/
 .ipynb_checkpoints/
 
+# === Generated artifacts (bytes stay outside Git; register in artifacts_index.md). ===
 output/
 outputs/
 6data 收敛的结果/
@@ -30,6 +31,7 @@ a2d_curobo_collect_run1/
 *.ckpt
 *.pt
 *.pth
+*.tgz
 *.npz
 *.npy
 *.jsonl
