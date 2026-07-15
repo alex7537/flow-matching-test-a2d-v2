@@ -4,6 +4,7 @@
 
 ## 2026-07-15｜66 条目标训练与 4090 交付封卷
 
+- 新增 `train+deploy/handoff_runbook.md`，作为 ws-05 交接入口，串联交付物、环境、Level 0→3 执行顺序、红线与汇报格式。
 - `b843b0f`：A800 Level 0 参考包完成，包含 66 条 best bundle、固定输入 NPZ、16×13 同 seed 输出 JSON、A800 lock 与四项 `SHA256SUMS`；4090 agent 方案交付标记完成。
 - `e5ce3ca`：新增参考推理生成器与 `ws05_rollout_task_v2.md`，冻结 Level 0→3、USD mimic、robot-local 坐标及 6 条 val × 5 次 rollout 验收协议。
 - `333f3b5`：完成 6 条 val 的 pregrasp/grasp 关键点可视化；grasp 手部平均 MSE 为 `0.00141 rad²`，3 条 arm-pregrasp 弱位姿留给 rollout 裁决。
