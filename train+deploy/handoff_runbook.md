@@ -11,9 +11,8 @@
 | # | 交付物 | 位置 | 校验 |
 |---|---|---|---|
 | 1 | 代码仓库 | `git@github.com:alex7537/flow-matching-test-a2d-v2.git`(Private) | 交接基线不得早于 `a65d3c9`;实际 HEAD 用 `git rev-parse HEAD` 记录,历史见 `CHANGE.md` |
-| 2 | 模型 bundle(TGZ) | A800 `/share_data/zhangyurui/flow-matching-test-a2d-v2/runs/a800_66ep_cfm_1507_20260715_141129/eval_bundles/` | SHA-256 `ebe1d1eb52de01e25d8c581c357c5bd71c5f5ccb30717c7a065812579335ecd8` |
-| 3 | Level 0 参考包 | A800 `/share_data/zhangyurui/flow-matching-test-a2d-v2/rollout_artifacts/level0_prep_66ep_step4674/`(含同 seed 输入 NPZ + 参考输出 JSON + lock 文件) | 包内四项 SHA-256 已记录,落地后逐项复核 |
-| 4 | 执行任务书 | 仓库 `train+deploy/ws05_rollout_task_v2.md` | 随代码 clone 获得 |
+| 2 | Level 0 完整交付目录 | psibot `~/rollout_handoff/level0_prep_66ep_step4674/`(已从 A800 拉取，含 bundle TGZ + 同 seed NPZ/JSON + lock + `SHA256SUMS`) | 整目录传输，每次落地只执行 `sha256sum -c SHA256SUMS` |
+| 3 | 执行任务书 | 仓库 `train+deploy/ws05_rollout_task_v2.md` | 随代码 clone 获得 |
 
 模型速览:CFM policy,66 条完整 lift episode 训练,best = epoch 18 / step 4674;
 dataset `a2d_parallel_1507_rgb_v1`,stats digest `f34e7703…`;
@@ -25,7 +24,8 @@ dataset `a2d_parallel_1507_rgb_v1`,stats digest `f34e7703…`;
 
 ### 2.1 访问权限
 - [ ] GitHub 仓库只读 Deploy Key(在 ws-05 生成 `ssh-keygen -t ed25519`,公钥加到仓库 Settings → Deploy keys,私钥放 `/root/.ssh`,不落共享盘)
-- [ ] A800 → ws-05 的文件通道(COS 或任一可达通道),用于 bundle + 参考包传输
+- [x] A800 → psibot 完整目录已传输并通过四项 SHA-256 校验
+- [ ] psibot → ws-05 的文件通道(scp / 内网共享 / U 盘，只传上表单一目录)
 - [ ] 与机主 qingyangli 约定推理时间窗(采集任务可暂停,交接要明确,不 kill 非本任务进程)
 
 ### 2.2 需要向采集侧确认的输入(缺任一项则对应 Level 明确报错停止,禁止手调假参数)
@@ -40,10 +40,13 @@ dataset `a2d_parallel_1507_rgb_v1`,stats digest `f34e7703…`;
 
 ### Step 1 — 传输与落地校验
 ```bash
-# ws-05 上,任选工作目录 $ROLLOUT_ROOT
-# 1. 取 bundle 与参考包(COS 下载或其他通道)
-sha256sum <bundle.tgz>        # 必须 == ebe1d1eb52de...5335ecd8,不符即停
-# 2. 参考包内四项文件逐一 sha256sum 比对包内记录
+# psibot 已落地并验证的唯一发件源
+cd ~/rollout_handoff/level0_prep_66ep_step4674
+sha256sum -c SHA256SUMS       # TGZ / NPZ / JSON / lock 四项已全绿
+
+# 将上述整个目录传入 ws-05；ws-05 落地后再执行一次
+cd <ws05-path>/level0_prep_66ep_step4674
+sha256sum -c SHA256SUMS       # 四项必须全部 OK，任一失败即停
 ```
 
 ### Step 2 — 环境(二选一,推荐容器)
