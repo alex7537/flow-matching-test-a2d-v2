@@ -23,7 +23,11 @@ from torch.utils.data import DataLoader
 from flow_matching_test.a2d_dataset import A2DConfig, A2DProcessedWindowDataset
 from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, _git_sha, export_eval_bundle
 from flow_matching_test.policies.base import ActionPolicy
-from flow_matching_test.policies.factory import build_policy, resolve_policy_type
+from flow_matching_test.policies.factory import (
+    build_policy,
+    materialize_policy_config,
+    resolve_policy_type,
+)
 from flow_matching_test.rerun_logger import RerunTrainVisualizer
 from flow_matching_test.segmentation import SEGMENTATION_VERSION
 from flow_matching_test.wandb_logger import WandbLogger
@@ -335,9 +339,10 @@ def main() -> None:
     training_cfg = cfg["training"]
     data_cfg = cfg["data"]
     model_cfg = cfg["model"]
-    policy_cfg = copy.deepcopy(cfg.get("policy", {"type": "flow_matching"}))
+    policy_cfg = materialize_policy_config(
+        copy.deepcopy(cfg.get("policy", {"type": "flow_matching"}))
+    )
     policy_type = resolve_policy_type(policy_cfg)
-    policy_cfg["type"] = policy_type
     cfg["policy"] = policy_cfg
     started_at = time.time()
 

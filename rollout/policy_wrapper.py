@@ -16,6 +16,7 @@ import yaml
 
 from flow_matching_test.policies.base import ActionPolicy
 from flow_matching_test.policies.factory import build_policy
+from flow_matching_test.policies.imle import ImlePolicy
 from flow_matching_test.segmentation import SEGMENTATION_VERSION
 
 
@@ -68,6 +69,8 @@ class Policy:
         }
         self._state_history: deque[np.ndarray] = deque(maxlen=self.history_steps)
         self.seed = int(self.cfg.get("sampling", {}).get("seed", 42))
+        self.execute_horizon = int(self.cfg["action"]["execute_horizon"])
+        self._previous_action_normalized: torch.Tensor | None = None
         self.calls = 0
 
     def _validate_bundle(self) -> None:
@@ -157,6 +160,7 @@ class Policy:
         for history in self._history.values():
             history.clear()
         self._state_history.clear()
+        self._previous_action_normalized = None
         self.calls = 0
 
     def _prepare_image(self, image: Any) -> torch.Tensor:
@@ -185,7 +189,7 @@ class Policy:
         return np.clip(2.0 * (value - lo) / span - 1.0, -3.0, 3.0)
 
     @torch.inference_mode()
-    def infer(self, obs: dict[str, Any]) -> np.ndarray:
+    def infer(self, obs: dict[str, Any], *, execute_horizon: int | None = None) -> np.ndarray:
         images = obs.get("images")
         if not isinstance(images, dict):
             raise TypeError("obs['images'] must be a camera-name to RGB image mapping")
@@ -209,7 +213,19 @@ class Policy:
         devices = [self.device.index or 0] if self.device.type == "cuda" else []
         with torch.random.fork_rng(devices=devices):
             torch.manual_seed(self.seed + self.calls)
-            sampled = self.model.sample_actions(model_obs).action[0]
+            horizon = self.execute_horizon if execute_horizon is None else int(execute_horizon)
+            if not 1 <= horizon <= int(self.cfg["action"]["chunk_size"]):
+                raise ValueError("execute_horizon is outside the action chunk")
+            if isinstance(self.model, ImlePolicy) and self._previous_action_normalized is not None:
+                result = self.model.sample_actions_bidirectional(
+                    model_obs,
+                    previous_action_normalized=self._previous_action_normalized,
+                    execute_horizon=horizon,
+                )
+            else:
+                result = self.model.sample_actions(model_obs)
+            self._previous_action_normalized = result.action_normalized.detach().clone()
+            sampled = result.action[0]
         self.calls += 1
         action = sampled.cpu().numpy()
         self._validate_action_range(action)

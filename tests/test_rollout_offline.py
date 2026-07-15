@@ -135,6 +135,12 @@ def test_alternate_policy_bundle_round_trip(tmp_path: Path, policy_cfg: dict) ->
     bundle = tmp_path / "bundle"
     _checkpoint(ckpt, policy_cfg=policy_cfg)
     export_eval_bundle(ckpt, bundle, execute_horizon=2)
+    exported_config = yaml.safe_load((bundle / "config.yaml").read_text())
+    if policy_cfg["type"] == "imle":
+        assert exported_config["policy"]["bidirection_enabled"] is True
+        assert exported_config["policy"]["bidirection_num_candidates"] == 32
+        assert exported_config["policy"]["bidirection_arm_weight"] == 0.0
+        assert exported_config["policy"]["bidirection_hand_weight"] == 1.0
     policy = Policy(bundle, device="cpu")
     policy.action_range_margin_ratio = 1.0e6  # random, untrained weights are intentionally unconstrained
     action = policy.infer(
@@ -148,6 +154,19 @@ def test_alternate_policy_bundle_round_trip(tmp_path: Path, policy_cfg: dict) ->
     )
     assert action.shape == (4, 13)
     assert np.isfinite(action).all()
+    if policy_cfg["type"] == "imle":
+        second = policy.infer(
+            {
+                "images": {
+                    "rgb_head": np.zeros((24, 40, 3), dtype=np.uint8),
+                    "rgb_right_hand": np.zeros((24, 40, 3), dtype=np.uint8),
+                },
+                "proprio": np.zeros(13, dtype=np.float32),
+            },
+            execute_horizon=2,
+        )
+        assert second.shape == (4, 13)
+        assert np.isfinite(second).all()
 
 
 def test_success_checker_and_report() -> None:

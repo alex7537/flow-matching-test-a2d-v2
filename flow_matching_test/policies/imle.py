@@ -30,6 +30,10 @@ class ImlePolicy(ActionPolicy):
         dropout: float = 0.0,
         n_samples_per_condition: int = 20,
         rs_imle_epsilon: float = 0.03,
+        bidirection_enabled: bool = True,
+        bidirection_num_candidates: int = 32,
+        bidirection_arm_weight: float = 0.0,
+        bidirection_hand_weight: float = 1.0,
     ) -> None:
         super().__init__()
         self.image_keys = tuple(image_keys)
@@ -40,12 +44,20 @@ class ImlePolicy(ActionPolicy):
         self.use_proprio = bool(use_proprio)
         self.n_samples_per_condition = int(n_samples_per_condition)
         self.rs_imle_epsilon = float(rs_imle_epsilon)
+        self.bidirection_enabled = bool(bidirection_enabled)
+        self.bidirection_num_candidates = int(bidirection_num_candidates)
+        self.bidirection_arm_weight = float(bidirection_arm_weight)
+        self.bidirection_hand_weight = float(bidirection_hand_weight)
         if not self.image_keys:
             raise ValueError("image_keys must not be empty")
         if self.n_samples_per_condition <= 0:
             raise ValueError("n_samples_per_condition must be > 0")
         if self.rs_imle_epsilon < 0.0:
             raise ValueError("rs_imle_epsilon must be >= 0")
+        if self.bidirection_num_candidates <= 0:
+            raise ValueError("bidirection_num_candidates must be > 0")
+        if self.bidirection_arm_weight < 0.0 or self.bidirection_hand_weight < 0.0:
+            raise ValueError("bidirection weights must be >= 0")
 
         self.encoder_type = str(encoder_type)
         self.obs_composer = build_rgb_obs_composer(
@@ -131,6 +143,36 @@ class ImlePolicy(ActionPolicy):
         valid_real = nearest < max_distance
         return nearest, valid_real
 
+    def _select_bidirectional_candidates(
+        self,
+        *,
+        previous_action: torch.Tensor,
+        candidates: torch.Tensor,
+        execute_horizon: int,
+    ) -> torch.Tensor:
+        """Choose candidates whose prefix best matches the unexecuted previous suffix."""
+        if previous_action.ndim != 3 or candidates.ndim != 4:
+            raise ValueError("previous_action must be [B,H,A] and candidates must be [B,N,H,A]")
+        if previous_action.shape[0] != candidates.shape[0]:
+            raise ValueError("previous_action and candidates batch sizes must match")
+        if previous_action.shape[1:] != candidates.shape[2:]:
+            raise ValueError("previous_action and candidates chunk shapes must match")
+        if not 0 <= execute_horizon < self.action_horizon:
+            raise ValueError("execute_horizon must be in [0, action_horizon)")
+
+        overlap = self.action_horizon - execute_horizon
+        target = previous_action[:, execute_horizon:].unsqueeze(1)
+        prefix = candidates[:, :, :overlap]
+        weights = candidates.new_full((self.action_dim,), self.bidirection_hand_weight)
+        weights[: min(7, self.action_dim)] = self.bidirection_arm_weight
+        distances = ((prefix - target).square() * weights.view(1, 1, 1, -1)).sum(dim=(2, 3))
+
+        # Random tie-breaking avoids a hidden first-candidate bias when weighted channels agree.
+        tied = torch.isclose(distances, distances.min(dim=1, keepdim=True).values)
+        selected_indices = torch.multinomial(tied.to(torch.float32), num_samples=1).squeeze(1)
+        batch_indices = torch.arange(candidates.shape[0], device=candidates.device)
+        return candidates[batch_indices, selected_indices]
+
     def compute_loss(
         self,
         batch: dict[str, torch.Tensor | dict[str, torch.Tensor]],
@@ -184,6 +226,44 @@ class ImlePolicy(ActionPolicy):
             dtype=obs[self.image_keys[0]].dtype,
         )
         normalized = self._generate(latent, self._encode_obs(obs))
+        return SamplingResult(
+            action_normalized=normalized,
+            action=self.denormalize_action(normalized),
+        )
+
+    @torch.no_grad()
+    def sample_actions_bidirectional(
+        self,
+        obs: dict[str, torch.Tensor],
+        *,
+        previous_action_normalized: torch.Tensor,
+        execute_horizon: int,
+    ) -> SamplingResult:
+        if not self.bidirection_enabled or execute_horizon >= self.action_horizon:
+            return self.sample_actions(obs)
+        batch_size = int(obs[self.image_keys[0]].shape[0])
+        cond_tokens = self._encode_obs(obs)
+        latent = torch.randn(
+            batch_size * self.bidirection_num_candidates,
+            self.action_horizon,
+            self.action_dim,
+            device=cond_tokens.device,
+            dtype=cond_tokens.dtype,
+        )
+        candidates = self._generate(
+            latent,
+            cond_tokens.repeat_interleave(self.bidirection_num_candidates, dim=0),
+        ).reshape(
+            batch_size,
+            self.bidirection_num_candidates,
+            self.action_horizon,
+            self.action_dim,
+        )
+        normalized = self._select_bidirectional_candidates(
+            previous_action=previous_action_normalized,
+            candidates=candidates,
+            execute_horizon=execute_horizon,
+        )
         return SamplingResult(
             action_normalized=normalized,
             action=self.denormalize_action(normalized),

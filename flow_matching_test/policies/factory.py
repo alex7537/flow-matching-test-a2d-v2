@@ -21,6 +21,24 @@ _ALIASES = {
 }
 
 
+def materialize_policy_config(policy_cfg: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return a provenance-ready policy config with inference defaults made explicit."""
+    config = dict(policy_cfg or {})
+    policy_type = resolve_policy_type(config)
+    config["type"] = policy_type
+    if policy_type == "imle":
+        config.setdefault("n_samples_per_condition", 20)
+        config.setdefault("rs_imle_epsilon", 0.03)
+        config.setdefault("bidirection_enabled", True)
+        config.setdefault("bidirection_num_candidates", 32)
+        config.setdefault("bidirection_arm_weight", 0.0)
+        config.setdefault("bidirection_hand_weight", 1.0)
+    elif policy_type == "diffusion":
+        config.setdefault("diffusion_train_steps", 100)
+        config.setdefault("diffusion_inference_steps", 15)
+    return config
+
+
 def resolve_policy_type(policy_cfg: Mapping[str, Any] | None) -> str:
     raw = "flow_matching" if policy_cfg is None else str(policy_cfg.get("type", "flow_matching"))
     policy_type = _ALIASES.get(raw.strip().lower())
@@ -39,7 +57,8 @@ def build_policy(
     history_steps: int,
     action_horizon: int,
 ) -> ActionPolicy:
-    policy_type = resolve_policy_type(policy_cfg)
+    policy_cfg = materialize_policy_config(policy_cfg)
+    policy_type = str(policy_cfg["type"])
     if policy_type == "flow_matching":
         return FlowMatchingPolicy(
             image_keys=image_keys,
@@ -77,6 +96,10 @@ def build_policy(
             dropout=float(model_cfg.get("dropout", 0.0)),
             n_samples_per_condition=int(policy_cfg.get("n_samples_per_condition", 20)),
             rs_imle_epsilon=float(policy_cfg.get("rs_imle_epsilon", 0.03)),
+            bidirection_enabled=bool(policy_cfg.get("bidirection_enabled", True)),
+            bidirection_num_candidates=int(policy_cfg.get("bidirection_num_candidates", 32)),
+            bidirection_arm_weight=float(policy_cfg.get("bidirection_arm_weight", 0.0)),
+            bidirection_hand_weight=float(policy_cfg.get("bidirection_hand_weight", 1.0)),
         )
     if policy_type == "diffusion":
         return DiffusionPolicy(

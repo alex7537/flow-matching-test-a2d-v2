@@ -103,3 +103,34 @@ def test_new_policy_loss_backprop_and_sampling(policy_cfg, expected_type, metric
     sampled = policy.sample_actions(batch["obs"])
     assert sampled.action_normalized.shape == (2, 4, 13)
     assert torch.isfinite(sampled.action_normalized).all()
+
+
+def test_imle_bidirectional_selection_ignores_arm_and_randomizes_weighted_ties() -> None:
+    policy = _policy(
+        {
+            "type": "imle",
+            "bidirection_arm_weight": 0.0,
+            "bidirection_hand_weight": 1.0,
+        }
+    )
+    assert isinstance(policy, ImlePolicy)
+    previous = torch.zeros(1, 4, 13)
+    previous[:, 2:, 7:] = 1.0
+    candidates = torch.zeros(1, 3, 4, 13)
+    candidates[:, 0, :2, :7] = 100.0
+    candidates[:, 0, :2, 7:] = 1.0
+    candidates[:, 1, :2, :7] = -100.0
+    candidates[:, 1, :2, 7:] = 1.0
+    candidates[:, 2, :2, 7:] = -1.0
+
+    selected_arms = set()
+    for seed in range(20):
+        torch.manual_seed(seed)
+        selected = policy._select_bidirectional_candidates(
+            previous_action=previous,
+            candidates=candidates,
+            execute_horizon=2,
+        )
+        assert torch.all(selected[:, :2, 7:] == 1.0)
+        selected_arms.add(float(selected[0, 0, 0]))
+    assert selected_arms == {-100.0, 100.0}

@@ -137,7 +137,7 @@ def run(
             error = None
             try:
                 for _ in range(int(grid.get("execution", {}).get("max_chunks", 16))):
-                    chunk = policy.infer(obs)
+                    chunk = policy.infer(obs, execute_horizon=horizon)
                     for action in chunk[:horizon]:
                         obs = env.step(action)
                         checker.update(env.state())

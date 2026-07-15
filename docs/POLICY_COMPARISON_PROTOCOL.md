@@ -15,6 +15,8 @@
 
 算法固有参数允许不同，但必须进入 config/provenance：CFM 的 Euler steps、RS-IMLE 的 `n_samples_per_condition/epsilon`、Diffusion 的 noise schedule 与 DDIM steps。比较按相同 optimizer steps 而不是 epoch 或 wall-clock 时间终止。
 
+“同网络主体”限定为相同 Transformer 骨架和 observation 管线；CFM/Diffusion 的时间条件与 RS-IMLE 的 latent 注入属于方法本征差异，不视为额外混淆变量。各方法必须使用其标准推理形态：CFM 用 5-step Euler（既有 5-vs-16 复读实验未见劣化）、Diffusion 用 DDIM、RS-IMLE 在重规划时用 32 候选的双向连续性选择。考虑 setpoint 语义，RS-IMLE 衔接距离默认 `arm_weight=0、hand_weight=1`，权重与候选数必须进入 config；该机制只在 `execute_horizon < chunk_size` 时生效，并在 Level 4 的 horizon=8/4 对照中单独评估。
+
 ## 评价与记录
 
 1. 主指标：相同 182 网格上的 rollout success rate，并报告 approach/close/lift 分阶段失败。

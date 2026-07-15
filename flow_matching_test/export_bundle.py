@@ -13,6 +13,8 @@ from typing import Any
 import torch
 import yaml
 
+from flow_matching_test.policies.factory import materialize_policy_config
+
 
 DEFAULT_JOINT_ORDER = [
     *(f"joint_arm2_link_{index}" for index in range(1, 8)),
@@ -72,6 +74,7 @@ def _inference_config(
     if policy_type not in {"flow_matching", "imle", "diffusion"}:
         raise ValueError(f"unsupported rollout policy_type={policy_type!r}")
     policy_cfg["type"] = policy_type
+    policy_cfg = materialize_policy_config(policy_cfg)
     chunk_size = int(data_cfg["action_horizon"])
     if not 1 <= execute_horizon <= chunk_size:
         raise ValueError(f"execute_horizon must be in [1,{chunk_size}]")
