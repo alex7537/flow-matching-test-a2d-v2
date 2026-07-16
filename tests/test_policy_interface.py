@@ -103,6 +103,8 @@ def test_new_policy_loss_backprop_and_sampling(policy_cfg, expected_type, metric
     sampled = policy.sample_actions(batch["obs"])
     assert sampled.action_normalized.shape == (2, 4, 13)
     assert torch.isfinite(sampled.action_normalized).all()
+    if isinstance(policy, DiffusionPolicy):
+        assert sampled.action_normalized.abs().max() <= 1.0
 
 
 def test_imle_bidirectional_selection_ignores_arm_and_randomizes_weighted_ties() -> None:
