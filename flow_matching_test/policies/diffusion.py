@@ -104,6 +104,9 @@ class DiffusionPolicy(FlowMatchingPolicy):
             )
             alpha_bar = self.alpha_bars[timestep].to(action.dtype)
             pred_clean = (action - (1.0 - alpha_bar).sqrt() * pred_noise) / alpha_bar.sqrt()
+            # Actions are min-max normalized to [-1, 1]. DDIM must clip each x0 estimate
+            # because the near-zero terminal alpha_bar amplifies small epsilon errors.
+            pred_clean = pred_clean.clamp(-1.0, 1.0)
             if index + 1 == len(timesteps):
                 action = pred_clean
             else:

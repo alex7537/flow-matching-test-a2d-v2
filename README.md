@@ -234,6 +234,8 @@ python3 -m flow_matching_test.export_rerun_eval \
 
 `main` 是唯一长期分支和可部署事实源；一切改动从最新 `main` 创建短命分支，通过 PR 审查并使用 **Squash and merge** 合并，合并后删除该分支，禁止直接 push `main`（强制分支保护待账号支持后开启）。
 
+本仓库发布不依赖 GitHub CLI `gh`，不得因其缺失阻塞发布；前置检查仅要求 `git remote -v` 指向正确的 `origin` 且 `ssh -T git@github.com` 认证通过，提交与推送使用原生 Git，PR 通过 GitHub 网页或已连接的 GitHub 接口创建。
+
 分支名使用 `<类型>/<描述>`，例如 `fix/runbook-typo`、`report/level0`、`feat/prefix-mask`；A800、bundle manifest 和 runbook 中的 `git_sha` 始终指向已合并的 `main` commit，不使用未合并分支作为正式训练或部署基线。
 
 训练、评估与部署产物本体不进入 Git；统一登记到 `artifacts_index.md`，记录存放位置、SHA-256 与对应 `git_sha`。训练曲线保存在 W&B，交付级模型保存在自包含 bundle、A800 或 COS。
