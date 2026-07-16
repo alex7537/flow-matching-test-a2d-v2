@@ -2,6 +2,11 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-07-16｜A800 凭据边界修正
+
+- 修正旧诊断：`activate_a800.sh` 会将 `HOME` 指向共享 CFS 的 `$WORK/home`，凭据读取路径变化而非“容器重启清空 `/root/.netrc`”更能解释此前登录状态丢失；现已审计该目录，无 `.netrc`、history、`.ssh` 或 credential 残留，并将目录权限由 `755` 收紧为 `700`。
+- `activate_a800.sh` 改为仅从容器本地 `/root/.secrets/wandb_api_key` 可选加载 W&B key，保留 TI-ONE Secret 作为优先方案；密钥不得写入 Git、shell history 或任何 `/share_data` 路径。
+
 ## 2026-07-15｜66 条目标训练与 4090 交付封卷
 
 - 新建 `artifacts_index.md`，登记 66 条 best bundle、Level 0 自包含交付包、val 可视化与 W&B run 的位置、SHA-256 和代码血统；`.gitignore` 归拢产物目录并补充 `*.tgz`，README 固化“产物本体不入库、身份信息进索引”的原则。

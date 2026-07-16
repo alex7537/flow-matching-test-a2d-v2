@@ -21,6 +21,16 @@ export MPLCONFIGDIR="$WORK/cache/matplotlib"
 export WANDB_DIR="$WORK/logs/wandb"
 export WANDB__SERVICE_WAIT="${WANDB__SERVICE_WAIT:-300}"
 
+# Keep credentials on the container-local filesystem, never in Git or shared CFS.
+export WANDB_API_KEY_FILE="${WANDB_API_KEY_FILE:-/root/.secrets/wandb_api_key}"
+if [[ -z "${WANDB_API_KEY:-}" && -s "$WANDB_API_KEY_FILE" && -r "$WANDB_API_KEY_FILE" ]]; then
+  if [[ "$(stat -c '%a' "$WANDB_API_KEY_FILE")" == "600" ]]; then
+    export WANDB_API_KEY="$(<"$WANDB_API_KEY_FILE")"
+  else
+    echo "Refusing W&B key file without mode 600: $WANDB_API_KEY_FILE" >&2
+  fi
+fi
+
 mkdir -p \
   "$HOME" \
   "$WORK_TMPDIR" \
@@ -32,3 +42,4 @@ mkdir -p \
   "$WANDB_DIR"
 
 mkdir -p -m 700 "$TMPDIR"
+chmod 700 "$HOME"

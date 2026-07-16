@@ -166,7 +166,14 @@ python3 -m flow_matching_test.train \
 如果你想把训练指标同步打到 `wandb`：
 
 ```bash
-wandb login <YOUR_WANDB_API_KEY>
+# A800:先在 W&B 撤销曾暴露的旧 key，再交互式写入容器本地密钥文件。
+install -d -m 700 /root/.secrets
+read -rsp "New W&B API key: " WANDB_KEY && echo
+install -m 600 /dev/null /root/.secrets/wandb_api_key
+printf '%s' "$WANDB_KEY" > /root/.secrets/wandb_api_key
+unset WANDB_KEY
+
+source ./activate_a800.sh  # 自动读取 /root/.secrets/wandb_api_key
 
 WANDB_MODE=online python3 -m flow_matching_test.train \
   --config configs/minimal_rgb_flow.yaml \
@@ -182,6 +189,8 @@ WANDB_MODE=online python3 -m flow_matching_test.train \
 - 本次 run 的配置、`best_epoch / best_val_loss` 与最终 summary
 
 默认使用 offline 模式，W&B 异常会自动降级为 no-op，不会中断训练；短任务需要实时同步时才临时设置 `WANDB_MODE=online`。
+
+A800 的 `HOME` 被显式重定向到共享 CFS 的 `$WORK/home`，只用于非敏感缓存且目录权限固定为 `700`；任何 API key、SSH key、token 与 shell history 都不得写入该目录，W&B 凭据只允许由 TI-ONE Secret 注入或保存在容器本地 `/root/.secrets/wandb_api_key`（`600`，容器重建后重新注入）。
 
 如果只是本地先试，不想真的上传远端，可以这样：
 
