@@ -1,0 +1,93 @@
+data:
+  data_dir: /share_data/zhangyurui/flow-matching-test-a2d-v2/datasets/a2d_parallel_1507_rgb_v1
+  image_keys: [rgb_head, rgb_right_hand]
+  image_size: 224
+  val_ratio: 0.1
+  history_steps: 1
+  action_horizon: 16
+  transition_oversample_factor: 2
+  transition_threshold: 0.1
+  motion_threshold: 1.0e-4
+  norm_stats: norm_stats.json
+  dataset_manifest: dataset_manifest.json
+  split_manifest: split_manifest.json
+  range_eps: 1.0e-4
+  aug_brightness: 0.2
+  aug_contrast: 0.4
+  aug_saturation: 0.2
+  aug_hue: 0.05
+
+policy:
+  type: diffusion
+  diffusion_train_steps: 100
+  diffusion_inference_steps: 15
+
+model:
+  encoder_type: timm
+  use_proprio: true
+  timm_model_name: vit_small_r26_s32_224
+  timm_pretrained: true
+  timm_token_mode: spatial
+  timm_tokens_per_frame: 49
+  d_model: 384
+  n_head: 4
+  n_layer: 4
+  dropout: 0.0
+  time_eps: 1.0e-3
+  num_inference_steps: 5
+
+training:
+  seed: 42
+  device: cuda
+  batch_size: 32
+  num_workers: 4
+  pin_memory: true
+  lr: 1.0e-4
+  backbone_lr_multiplier: 0.1
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+  warmup_steps: null
+  num_epochs: 30
+  max_train_steps: null
+  max_val_steps: null
+  resume_from: null
+  run_name: a800_66ep_diffusion_1507_{timestamp}
+  output_dir: /share_data/zhangyurui/flow-matching-test-a2d-v2/runs/{run_name}
+
+logging:
+  wandb:
+    enabled: true
+    mode: online
+    project: a2d-flow-matching
+    entity: z1135783608-psibot
+    group: a2d_parallel_1507_66ep_policy_compare
+    job_type: train
+    tags: [a800, rgb, diffusion, ddim, timm, a2d-parallel-1507, 66ep, policy-compare]
+
+visualization:
+  rerun:
+    enabled: false
+    spawn: false
+    save_path: training.rrd
+    sample_source: val
+    sample_every_n_epochs: 1
+
+deployment:
+  eval_bundle:
+    enabled: false
+    execute_horizon: 16
+    archive: true
+    data_version: a2d_parallel_1507_rgb_v1
+    action_range_guard_margin_ratio: 0.1
+    rollout_environment:
+      isaac_sim_version: null
+      physics_dt_s: 0.008333333333333333
+      render_dt_s: 0.03333333333333333
+      solver_position_iterations: null
+      solver_velocity_iterations: null
+      object_mass_kg: null
+      static_friction: null
+      dynamic_friction: null
+    camera_resolutions: {}
+    joint_order: [joint_arm2_link_1, joint_arm2_link_2, joint_arm2_link_3, joint_arm2_link_4, joint_arm2_link_5, joint_arm2_link_6, joint_arm2_link_7, hand2_joint_link_1_1, hand2_joint_link_2_1, hand2_joint_link_3_1, hand2_joint_link_4_1, hand2_joint_link_5_1, hand2_joint_link_1_2]
