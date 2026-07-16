@@ -40,7 +40,7 @@
 
 ## 2. 管线架构
 
-> **W&B 分级纪律:**分钟级调试/小数据 run 可在 A800 使用 `online` 实时上传，但 `WandbLogger` 必须在异常时只告警一次并永久降级为 no-op；350GB 长训固定以 `wandb==0.28.0` offline 落盘，再搬运到 psibot 用 `requirements.lock.wandb-sync.txt` 固定的 `wandb==0.27.0` 同步，并以 `scripts/verify_wandb_sync.py` 的服务端 run 存在性及 history 行数校验作为成功判据；online 密钥不得落入共享 `/share_data`。
+> **W&B 分级纪律:**分钟级调试/小数据 run 可在 A800 使用 `online` 实时上传，但 `WandbLogger` 必须在异常时只告警一次并永久降级为 no-op；长训固定以 `wandb==0.28.0` offline 落盘，再搬运到 psibot 用 `requirements.lock.wandb-sync.txt` 固定的 `wandb==0.27.0` 同步，并以 `scripts/verify_wandb_sync.py` 的服务端 run 存在性及 history 行数校验作为成功判据。A800 的 `HOME=$WORK/home` 位于共享 CFS，仅允许保存非敏感缓存并设为 `700`；online 密钥不得落入任何 `/share_data` 路径，只能由 TI-ONE Secret 注入或保存到容器本地 `/root/.secrets/wandb_api_key`（`600`）。
 
 ```
 原始 success/*.hdf5  (100–200 GB, chunk 布局对随机读极不友好)
