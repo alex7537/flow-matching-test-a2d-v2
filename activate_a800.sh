@@ -21,6 +21,12 @@ export MPLCONFIGDIR="$WORK/cache/matplotlib"
 export WANDB_DIR="$WORK/logs/wandb"
 export WANDB__SERVICE_WAIT="${WANDB__SERVICE_WAIT:-300}"
 
+# Keep credentials on the container-local filesystem, never in Git or shared CFS.
+export WANDB_API_KEY_FILE="${WANDB_API_KEY_FILE:-/root/.secrets/wandb_api_key}"
+if [[ -z "${WANDB_API_KEY:-}" && -s "$WANDB_API_KEY_FILE" && -r "$WANDB_API_KEY_FILE" ]]; then
+  export WANDB_API_KEY="$(<"$WANDB_API_KEY_FILE")"
+fi
+
 mkdir -p \
   "$HOME" \
   "$WORK_TMPDIR" \
