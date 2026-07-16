@@ -2,6 +2,12 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-07-16｜三 policy 部署产物登记
+
+- `9f8e60a` 修复 Diffusion 的 DDIM 末步数值放大：将预测的 clean action 裁剪到训练归一化契约 `[-1,1]`，使原本无效的 DP val sample MSE（约 `5820.76`）恢复为 `0.01376`；CFM/RS-IMLE 经出口对称性检查仅有轻微学习型越界，保持不裁剪。
+- 已导出并逐项 SHA-256 验证 RS-IMLE best（epoch 24 / step 6150）与 Diffusion best（epoch 29 / step 7380）的 Level 0 自包含包；二者均使用相同 val[0] frame 0、seed `20260715` 的参考输入/输出，bundle manifest 锚定 `9f8e60a`。
+- 三 policy 的 loss/sample MSE 只作为各自数值健康证据，禁止横向排名；最终优劣统一由 ws-05 上的同协议 rollout 成功率裁决。
+
 ## 2026-07-16｜A800 凭据边界修正
 
 - 修正旧诊断：`activate_a800.sh` 会将 `HOME` 指向共享 CFS 的 `$WORK/home`，凭据读取路径变化而非“容器重启清空 `/root/.netrc`”更能解释此前登录状态丢失；现已审计该目录，无 `.netrc`、history、`.ssh` 或 credential 残留，并将目录权限由 `755` 收紧为 `700`。
