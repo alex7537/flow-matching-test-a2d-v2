@@ -83,3 +83,11 @@ This file records implementation decisions, deviations from the agreed plan, and
 - Controlled variables: Same A2D dataset/split, seed 42, augmentation, batch size, 30 epochs, scheduler, policy architecture, and W&B group.
 - Verification gates: Repository tests → one-step frozen/fine-tuned GPU smoke → authenticated W&B online smoke → sequential full runs.
 - Configs: configs/a2d_parallel_1507_cfm_a800_vit_frozen.yaml and configs/a2d_parallel_1507_cfm_a800_vit_finetune_01x.yaml.
+
+### 2026-07-20 — A800 patch application identity
+
+- Planned approach: Transfer the tested local commit to the clean A800 repository with git format-patch and git am so the training provenance has an exact commit SHA.
+- Edge case / trigger: The A800 repository had no committer identity configured, so git am stopped before applying the patch.
+- Conservative action: Abort the incomplete am operation and transfer the tested branch as a Git bundle, preserving the exact commit objects without changing local or global Git identity.
+- Impact: No code or training output was produced by the failed attempt; remote branch creation is retained.
+- Verification: Require remote HEAD to match the local tested commit and remote worktree to be clean before any GPU smoke.
