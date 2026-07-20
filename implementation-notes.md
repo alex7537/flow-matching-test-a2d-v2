@@ -99,3 +99,20 @@ This file records implementation decisions, deviations from the agreed plan, and
 - Frozen GPU smoke: PASS — backbone gradient norm 0, encoder update ratio 0, W&B online run https://wandb.ai/z1135783608-psibot/a2d-flow-matching/runs/sgdvjh4s.
 - Fine-tuned GPU smoke: PASS — backbone gradient norm 7.982551, encoder update ratio 1.272233e-4, W&B online run https://wandb.ai/z1135783608-psibot/a2d-flow-matching/runs/eqkxg0zq.
 - Gate decision: Start the two 30-epoch runs sequentially on the same idle NVIDIA A800-SXM4-80GB.
+
+### 2026-07-20 — Full CFM ViT freeze ablation result
+
+- Execution: PASS — sequential Frozen and Fine-tune 0.1× runs each completed 30 epochs / 7380 steps on the same A800.
+- W&B verification: PASS — both server-side runs contain 30 epoch history rows.
+- Frozen: best val loss 0.041466967 at epoch 22; W&B run essqf82i.
+- Fine-tune 0.1×: best val loss 0.061159926 at epoch 18; W&B run y57y2zjq.
+- Decision: Use the frozen-ViT checkpoint as the primary simulation-validation candidate for the current 66-episode dataset.
+- Report: reports/cfm_vit_freeze_ablation_20260720.md.
+
+### 2026-07-20 — Launch status display typo
+
+- Planned approach: Launch the detached sequential script and immediately print its status file.
+- Edge case / trigger: The outer SSH verification snippet referenced an unset shell variable after the process had already started.
+- Conservative action: Do not restart or duplicate the live training process; query the known status-file path directly and verify PID, GPU allocation, log output, and W&B URL.
+- Impact: Display command only; training script, configuration, process, and outputs were unaffected.
+- Verification: Both runs subsequently completed and passed local/W&B history checks.
