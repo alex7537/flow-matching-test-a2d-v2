@@ -133,3 +133,10 @@ This file records implementation decisions, deviations from the agreed plan, and
 - Conservative action: Do not extract, delete, or overwrite the partial file; rename it with a .partial suffix, redownload to a temporary path, and only atomically promote it after remote/local byte size and SHA256 both match.
 - Impact: No bundle content was trusted or extracted from the incomplete transfer.
 - Expected remote SHA256: 6225396967997d96ff4911e186612a7535091f9395d4f424f38481c56afd2175.
+
+### 2026-07-20 — Switch Bundle transfer to verified chunks
+
+- Planned retry: Redownload the 170,197,709-byte archive to a temporary local path over one SCP connection.
+- Repeated edge case: The SSH connection reset again before completion at a similar transfer size.
+- Conservative action: Preserve the second partial download, split the immutable remote archive into 32 MiB chunks, transfer each chunk over an independent connection, verify every chunk SHA256, then concatenate and verify the original full-archive SHA256 before promotion.
+- Impact: Transfer method only; the verified A800 archive remains unchanged.
