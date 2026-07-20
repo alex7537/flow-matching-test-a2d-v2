@@ -32,6 +32,10 @@ index_cache.json + norm_stats.json
 - action：`arm2_pos(7) + hand2_pos(6)`
 
 action 固定为 13 维实际执行关节位置，归一化统计使用 train episodes 的逐维 min/max；稀疏的 `*_pos_target` 不参与训练标签。
+默认 `action_offset_steps=1`，因此时刻 `t` 的观测对应
+`action[t+1:t+1+action_horizon]`；输出 `chunk[0]` 是下一帧绝对关节位置，
+不再重复当前 proprio。旧 checkpoint 未记录该字段时按历史语义 `offset=0` 解释，不能
+与新窗口语义混用或直接 resume。
 
 模型条件输入默认包含配置选中的 RGB spatial tokens 和归一化 13 维 proprio state token。
 
@@ -185,8 +189,15 @@ WANDB_MODE=online python3 -m flow_matching_test.train \
 
 - 每个 epoch 的 train/val、static/continuous/keyframe loss 与 sample action MSE
 - head/backbone 两组学习率，以及两组梯度范数的 epoch mean/max
+- 三个不参与反向传播的视觉 encoder 监控指标：
+  - `encoder_update_ratio`：一个 epoch 内 backbone 参数实际变化量 / epoch 初参数量
+  - `encoder_grad_param_ratio_mean`：backbone 梯度范数 / backbone 参数范数的 batch 均值
+  - `encoder_feature_std`：诊断 batch 上原始视觉 token 的逐通道标准差均值，用于监测特征坍缩
 - git、dataset、stats、split、segmentation provenance
 - 本次 run 的配置、`best_epoch / best_val_loss` 与最终 summary
+
+这三个 encoder 指标只用于观察，不会加到 CFM、RS-IMLE 或 Diffusion 的训练 loss，
+因此不会改变现有三 policy 的优化目标或公平比较协议。
 
 默认使用 offline 模式，W&B 异常会自动降级为 no-op，不会中断训练；短任务需要实时同步时才临时设置 `WANDB_MODE=online`。
 

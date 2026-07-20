@@ -77,6 +77,26 @@ def test_policy_loss_backprop_sampling_and_parameter_groups() -> None:
     assert sampled.action.shape == (2, 4, 13)
 
 
+def test_frozen_backbone_is_excluded_from_optimizer_groups() -> None:
+    policy = _policy()
+    backbone = policy.backbone_parameters()
+    for parameter in backbone:
+        parameter.requires_grad_(False)
+
+    groups, head, returned_backbone = policy.optimizer_parameter_groups(
+        base_lr=1.0e-4,
+        backbone_lr_multiplier=0.0,
+    )
+
+    grouped_ids = {id(parameter) for group in groups for parameter in group["params"]}
+    assert grouped_ids == {id(parameter) for parameter in policy.parameters() if parameter.requires_grad}
+    assert groups[1]["params"] == []
+    assert groups[1]["lr"] == 0.0
+    assert returned_backbone == backbone
+    assert all(not parameter.requires_grad for parameter in returned_backbone)
+    assert all(parameter.requires_grad for parameter in head)
+
+
 def test_legacy_model_import_and_state_dict_remain_compatible() -> None:
     assert RGBConditionedFlowModel is FlowMatchingPolicy
     source = _policy()

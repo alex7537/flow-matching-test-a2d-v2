@@ -8,10 +8,13 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import h5py
 
 from flow_matching_test.a2d_dataset import (
     A2DConfig,
+    A2DFlowDataset,
     STATS_SCHEMA_VERSION,
+    normalize,
     split_episodes_from_manifest,
     train_episode_binding,
     validate_stats_binding,
@@ -21,6 +24,46 @@ from scripts.ingest_a2d import admission_reason
 
 
 class DataContractTest(unittest.TestCase):
+    def test_default_action_chunk_starts_at_the_next_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "episode.hdf5"
+            length = 5
+            qpos = np.repeat(np.arange(length, dtype=np.float32)[:, None], 13, axis=1)
+            with h5py.File(path, "w") as file:
+                observations = file.create_group("observations")
+                observations.create_dataset("qpos", data=qpos)
+                observations.create_dataset(
+                    "rgb_head",
+                    data=np.zeros((length, 4, 4, 3), dtype=np.uint8),
+                )
+                file.create_dataset("action", data=qpos)
+
+            cfg = A2DConfig(
+                image_keys=("rgb_head",),
+                image_size=4,
+                history_steps=1,
+                action_horizon=2,
+                aug_random_crop_pad=0,
+            )
+            stats = {
+                "state": {"min": [0.0] * 13, "span": [4.0] * 13},
+                "action": {"min": [0.0] * 13, "span": [4.0] * 13},
+            }
+            dataset = A2DFlowDataset(
+                cfg=cfg,
+                episodes=[{"path": str(path), "length": length}],
+                norm_stats=stats,
+                train=False,
+            )
+
+            sample = dataset[0]
+            np.testing.assert_allclose(sample["state"].numpy(), normalize(qpos[0], stats["state"]))
+            np.testing.assert_allclose(
+                sample["action"].numpy(),
+                normalize(qpos[1:3], stats["action"]),
+            )
+            self.assertEqual(cfg.action_offset_steps, 1)
+
     def test_ingest_gate_quarantines_truncated_complete_lift_episode(self) -> None:
         report = {
             "errors": [],

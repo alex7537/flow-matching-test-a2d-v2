@@ -96,6 +96,7 @@ def test_bundle_policy_round_trip(tmp_path: Path) -> None:
     export_eval_bundle(ckpt, bundle, execute_horizon=2)
     exported_config = yaml.safe_load((bundle / "config.yaml").read_text())
     assert exported_config["policy"]["type"] == "flow_matching"
+    assert exported_config["action"]["offset_steps"] == 0
     assert exported_config["joint_order"] == DEFAULT_JOINT_ORDER
     assert (bundle / "data_split.json").exists()
     manifest = yaml.safe_load((bundle / "manifest.json").read_text())

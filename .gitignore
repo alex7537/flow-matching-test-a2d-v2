@@ -15,6 +15,7 @@ data-rgb*/
 # === Generated artifacts (bytes stay outside Git; register in artifacts_index.md). ===
 output/
 outputs/
+/repository-change-report.html
 6data 收敛的结果/
 模型存档/
 结果-图片/

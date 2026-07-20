@@ -69,6 +69,7 @@ class A2DConfig:
     image_size: int = 224
     history_steps: int = 1
     action_horizon: int = 16
+    action_offset_steps: int = 1
     transition_oversample_factor: int = 1
     transition_threshold: float = DEFAULT_KEYFRAME_THRESHOLD
     motion_threshold: float = DEFAULT_MOTION_THRESHOLD
@@ -410,12 +411,14 @@ class A2DFlowDataset(Dataset):
     """Returns per sample:
         images:      (n_cams * history, 3, S, S) float32 in [0, 1]
         state:       (history * D_state,)        normalized
-        action:      (horizon, 13)               normalized executed joint position
+        action:      (horizon, 13)               normalized future executed joint position
         action_mask: (horizon,)                  1 = real, 0 = tail padding
     """
 
     def __init__(self, cfg: A2DConfig, episodes: list[dict],
                  norm_stats: dict, train: bool):
+        if cfg.action_offset_steps < 0:
+            raise ValueError("action_offset_steps must be >= 0")
         self.cfg = cfg
         self.episodes = episodes
         self.stats = norm_stats
@@ -424,7 +427,7 @@ class A2DFlowDataset(Dataset):
         self.samples: list[tuple[int, int]] = []
         h = cfg.history_steps - 1
         for i, e in enumerate(episodes):
-            for t in range(h, e["length"]):
+            for t in range(h, e["length"] - cfg.action_offset_steps):
                 self.samples.append((i, t))
         # per-worker lazy handles — NEVER open h5py.File before fork
         self._handles: dict[int, h5py.File] = {}
@@ -513,10 +516,11 @@ class A2DFlowDataset(Dataset):
         state = f[cfg.obs_group][cfg.state_key][s0:t + 1].astype(np.float32)
         state = normalize(state, self.stats["state"]).reshape(-1)
 
-        # action chunk [t, t+H) with tail padding + mask
+        # Future action chunk [t+offset, t+offset+H) with tail padding + mask.
         T, H = ep["length"], cfg.action_horizon
-        end = min(t + H, T)
-        chunk = f[cfg.action_key][t:end].astype(np.float32)
+        start = t + cfg.action_offset_steps
+        end = min(start + H, T)
+        chunk = f[cfg.action_key][start:end].astype(np.float32)
         n_pad = H - chunk.shape[0]
         mask = np.ones(H, dtype=np.float32)
         if n_pad > 0:
@@ -557,7 +561,8 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
         self.samples = [
             (ep_idx, t)
             for ep_idx, t in self.samples
-            if t + cfg.action_horizon <= self.episodes[ep_idx]["length"]
+            if t + cfg.action_offset_steps + cfg.action_horizon
+            <= self.episodes[ep_idx]["length"]
         ]
         if not self.samples:
             raise ValueError(f"split {split} has no complete action windows")
@@ -573,6 +578,7 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
                 arm_keyframe = np.asarray(file["arm_keyframe"][:], dtype=bool)
             for sample in samples_by_episode.get(ep_idx, []):
                 _, start = sample
+                start += cfg.action_offset_steps
                 stop = start + cfg.action_horizon
                 has_arm_keyframe = bool(np.any(arm_keyframe[start:stop]))
                 self.segment_by_sample[sample] = int(np.max(segment_type[start:stop]))

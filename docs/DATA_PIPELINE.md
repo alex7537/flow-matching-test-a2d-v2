@@ -141,6 +141,7 @@ training:
 8. **模型默认将归一化后的 13 维当前 joint state 编码为 proprio condition token**。
 9. **分段在预处理阶段物化**：processed HDF5 保存 `segmentation_version`、阈值、`segment_type` 与 `arm_keyframe`，Dataset 只读取并校验版本，不在线重判。
 10. **数据集版本不可原地改写 stats**：train 成员变化后创建新数据目录或使用新的 `--norm-stats` 文件名，旧 checkpoint 继续绑定旧摘要。
+11. **动作窗口默认向未来偏移一帧**：`obs[t] → action[t+1:t+1+H]`；窗口完整性过滤、关键帧窗口标签与过采样使用同一偏移范围。旧 checkpoint 缺少 `action_offset_steps` 时按 `0` 解释。
 
 ## 6. 待确认项(部署前必须核对)
 
