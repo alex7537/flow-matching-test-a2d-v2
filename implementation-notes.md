@@ -32,6 +32,7 @@ This file records implementation decisions, deviations from the agreed plan, and
 |---|---|---|---|
 | 2026-07-20 | Add this persistent implementation log to the repository. | Make plan deviations and verification evidence explicit and reviewable. | User request |
 | 2026-07-20 | Add three encoder diagnostics without adding an auxiliary encoder loss. | Observe encoder learning and collapse risk while preserving the frozen CFM/RS-IMLE/Diffusion objectives and comparison protocol. | `encoder_update_ratio`, `encoder_grad_param_ratio_mean`, `encoder_feature_std` |
+| 2026-07-20 | Promote Frozen ViT with `action_offset_steps=1` as the current simulation-validation architecture. | Frozen ViT generalized better in the controlled ablation, and offset 1 removes the ambiguous current-frame action from every predicted chunk. | Training commit `a78fa8f`; W&B `arzpl1mx`; eval bundle SHA256 `6225396967997d96ff4911e186612a7535091f9395d4f424f38481c56afd2175` |
 
 ## Deviations | 偏差
 
@@ -56,6 +57,7 @@ This file records implementation decisions, deviations from the agreed plan, and
 | 2026-07-20 | Flow Matching encoder-loss audit | Traced `FlowMatchingPolicy.compute_loss()` through `_encode_obs()`, optimizer parameter groups, and epoch metrics; ran a fresh CNN gradient probe after `loss.backward()`. | PASS — no separate encoder loss exists; the encoder is trained end-to-end by `flow_loss`; all 8 backbone parameter tensors received non-zero gradients (probe L2 norm 2.1526). Existing metrics expose backbone LR and gradient norms, not encoder convergence loss. | `flow_matching_test/policies/flow_matching.py`, `flow_matching_test/policies/base.py`, `flow_matching_test/train.py` |
 | 2026-07-20 | Encoder diagnostics implementation | Ran `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q`, then a two-epoch CPU integration smoke on `data-rgb-complete-processed`. | PASS — 18 tests passed; both smoke epochs emitted finite `encoder_update_ratio`, `encoder_grad_param_ratio_mean`, and `encoder_feature_std`. | Smoke metrics: `/tmp/flow_encoder_metrics_smoke.EIn3o3/metrics.jsonl` |
 | 2026-07-20 | Frozen-ViT next-action inference bundle | Verified the reassembled archive SHA256 and every internal manifest hash, safely extracted it, then loaded the bundle on CPU and inferred from frame 0 of `episode_000002_success.hdf5`. | PASS — output shape `(16, 13)`, float32, all finite, action-range guard passed; the target comparison used demonstration frames 1–16 and produced chunk MSE 0.0276808. | Local bundle: `eval_bundles_local/cfm_frozen_next_action_offset1_seed42_best`; archive SHA256 `6225396967997d96ff4911e186612a7535091f9395d4f424f38481c56afd2175` |
+| 2026-07-20 | Current architecture and change-log synchronization | Updated `目标架构.md` and `CHANGE.md`; checked Markdown fence balance, required provenance fields, and repository regression tests. | PASS — required offset/model/bundle references present; `git diff --check` clean; 21 tests passed. | Documentation sync before GitHub/A800 fast-forward |
 
 ## Open Items | 待处理事项
 

@@ -2,6 +2,15 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-07-20｜Frozen ViT 下一帧动作模型与推理包
+
+- 完成 Frozen ViT 与 ViT Fine-tune 0.1× 的受控消融；Frozen 的 best val flow loss 为 `0.041467`，Fine-tune 为 `0.061160`。微调虽然获得更低 train loss，但 validation gap 更大，因此当前 66-episode 数据规模选择冻结预训练 ViT。
+- 明确当前实现中的“视觉 adapter”边界：仓库提供 token 维度对齐 adapter，但 `vit_small_r26_s32_224` 的输出维度正好等于 `d_model=384`，本配置下 adapter 为 `Identity`；ViT 冻结后，由 condition 位置编码、proprio projection 与 Flow Matching Transformer 学习任务适配。
+- `a78fa8f` 将动作窗口改为下一帧契约：`obs[t] → action[t+1:t+17]`。完整窗口过滤、分段标签、checkpoint/resume provenance 和 bundle 配置均同步携带 `action_offset_steps=1`；旧 offset=0 checkpoint 仅保留作消融证据。
+- A800 完成 `cfm_66ep_vit_frozen_next_action_seed42`：30 epochs / 7320 steps，best `val_loss=0.051097`（epoch 21），best `val_sample_action_mse=0.013971`（epoch 27）；W&B run 为 `arzpl1mx`。
+- 导出并校验 `cfm_frozen_next_action_offset1_seed42_best.tgz`：归档 SHA-256 为 `6225396967997d96ff4911e186612a7535091f9395d4f424f38481c56afd2175`，manifest 锚定 `a78fa8f89e504e18100c424bdf1216540be8dec7`。
+- 使用真实成功轨迹 `episode_000002_success.hdf5` frame 0 完成本地 CPU 推理，输出为 `(16,13)` float32，全部有限且动作范围哨兵通过；下一阶段是接入仿真推理 server 与 `set angle` 执行闭环。
+
 ## 2026-07-16｜三 policy 部署产物登记
 
 - `9f8e60a` 修复 Diffusion 的 DDIM 末步数值放大：将预测的 clean action 裁剪到训练归一化契约 `[-1,1]`，使原本无效的 DP val sample MSE（约 `5820.76`）恢复为 `0.01376`；CFM/RS-IMLE 经出口对称性检查仅有轻微学习型越界，保持不裁剪。
