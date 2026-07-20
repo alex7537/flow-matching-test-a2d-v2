@@ -47,9 +47,17 @@ class ActionPolicy(nn.Module, ABC):
     ) -> tuple[list[dict[str, Any]], list[nn.Parameter], list[nn.Parameter]]:
         backbone = list(self.backbone_parameters())
         backbone_ids = {id(parameter) for parameter in backbone}
-        head = [parameter for parameter in self.parameters() if id(parameter) not in backbone_ids]
+        head = [
+            parameter
+            for parameter in self.parameters()
+            if id(parameter) not in backbone_ids and parameter.requires_grad
+        ]
+        trainable_backbone = [parameter for parameter in backbone if parameter.requires_grad]
         groups = [
             {"params": head, "lr": float(base_lr)},
-            {"params": backbone, "lr": float(base_lr) * float(backbone_lr_multiplier)},
+            {
+                "params": trainable_backbone,
+                "lr": float(base_lr) * float(backbone_lr_multiplier),
+            },
         ]
         return groups, head, backbone

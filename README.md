@@ -185,8 +185,15 @@ WANDB_MODE=online python3 -m flow_matching_test.train \
 
 - 每个 epoch 的 train/val、static/continuous/keyframe loss 与 sample action MSE
 - head/backbone 两组学习率，以及两组梯度范数的 epoch mean/max
+- 三个不参与反向传播的视觉 encoder 监控指标：
+  - `encoder_update_ratio`：一个 epoch 内 backbone 参数实际变化量 / epoch 初参数量
+  - `encoder_grad_param_ratio_mean`：backbone 梯度范数 / backbone 参数范数的 batch 均值
+  - `encoder_feature_std`：诊断 batch 上原始视觉 token 的逐通道标准差均值，用于监测特征坍缩
 - git、dataset、stats、split、segmentation provenance
 - 本次 run 的配置、`best_epoch / best_val_loss` 与最终 summary
+
+这三个 encoder 指标只用于观察，不会加到 CFM、RS-IMLE 或 Diffusion 的训练 loss，
+因此不会改变现有三 policy 的优化目标或公平比较协议。
 
 默认使用 offline 模式，W&B 异常会自动降级为 no-op，不会中断训练；短任务需要实时同步时才临时设置 `WANDB_MODE=online`。
 

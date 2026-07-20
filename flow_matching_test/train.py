@@ -73,6 +73,65 @@ def _grad_l2_norm(parameters: list[torch.nn.Parameter]) -> float:
     return math.sqrt(squared)
 
 
+def _parameter_l2_norm(parameters: list[torch.nn.Parameter]) -> float:
+    squared = 0.0
+    for parameter in parameters:
+        norm = parameter.detach().float().norm(2)
+        squared += float(norm.item()) ** 2
+    return math.sqrt(squared)
+
+
+def _snapshot_parameters(parameters: list[torch.nn.Parameter]) -> list[torch.Tensor]:
+    """Keep an epoch-start CPU snapshot for a low-frequency update diagnostic."""
+    return [parameter.detach().float().cpu().clone() for parameter in parameters]
+
+
+def _parameter_update_ratio(
+    parameters: list[torch.nn.Parameter],
+    reference: list[torch.Tensor],
+) -> float:
+    if len(parameters) != len(reference):
+        raise ValueError("Parameter snapshot length mismatch")
+    reference_squared = 0.0
+    delta_squared = 0.0
+    for parameter, baseline in zip(parameters, reference, strict=True):
+        current = parameter.detach().float().cpu()
+        reference_squared += float(torch.sum(baseline * baseline).item())
+        delta = current - baseline
+        delta_squared += float(torch.sum(delta * delta).item())
+    return math.sqrt(delta_squared) / max(math.sqrt(reference_squared), 1.0e-12)
+
+
+@torch.no_grad()
+def _encoder_feature_std(model: ActionPolicy, obs: dict[str, torch.Tensor]) -> float:
+    """Mean per-channel std of raw visual encoder tokens on one diagnostic batch."""
+    composer = getattr(model, "obs_composer", None)
+    encoders = getattr(composer, "encoders", None)
+    if encoders is None:
+        return 0.0
+    per_encoder: list[float] = []
+    for encoder in encoders:
+        token_map = encoder(obs)
+        features = [
+            value.detach().float().reshape(-1, value.shape[-1])
+            for value in token_map.values()
+            if torch.is_tensor(value) and value.ndim >= 2
+        ]
+        if not features:
+            continue
+        merged = torch.cat(features, dim=0)
+        per_encoder.append(float(merged.std(dim=0, unbiased=False).mean().item()))
+    return float(np.mean(per_encoder)) if per_encoder else 0.0
+
+
+def _set_backbone_frozen(model: ActionPolicy, *, frozen: bool) -> int:
+    """Freeze only the pretrained visual backbone, leaving adapters and policy head trainable."""
+    parameters = model.backbone_parameters()
+    for parameter in parameters:
+        parameter.requires_grad_(not frozen)
+    return sum(parameter.numel() for parameter in parameters)
+
+
 def _runtime_environment() -> dict[str, Any]:
     try:
         import timm
@@ -392,6 +451,11 @@ def main() -> None:
         data_cfg=data_cfg,
         train_dataset=train_dataset,
     ).to(device)
+    freeze_encoder_backbone = bool(model_cfg.get("freeze_encoder_backbone", False))
+    backbone_parameter_count = _set_backbone_frozen(
+        model,
+        frozen=freeze_encoder_backbone,
+    )
     stats = train_dataset.export_stats()
     model.set_action_stats(action_mean=stats["action_mean"].to(device), action_std=stats["action_std"].to(device))
 
@@ -553,6 +617,9 @@ def main() -> None:
         epoch_components: dict[str, list[float]] = defaultdict(list)
         epoch_grad_norm_head: list[float] = []
         epoch_grad_norm_backbone: list[float] = []
+        epoch_encoder_grad_param_ratio: list[float] = []
+        encoder_reference = _snapshot_parameters(backbone_params)
+        encoder_param_norm = _parameter_l2_norm(backbone_params)
 
         for batch_idx, batch in enumerate(train_loader):
             if max_train_steps is not None and batch_idx >= int(max_train_steps):
@@ -562,7 +629,11 @@ def main() -> None:
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             epoch_grad_norm_head.append(_grad_l2_norm(head_params))
-            epoch_grad_norm_backbone.append(_grad_l2_norm(backbone_params))
+            backbone_grad_norm = _grad_l2_norm(backbone_params)
+            epoch_grad_norm_backbone.append(backbone_grad_norm)
+            epoch_encoder_grad_param_ratio.append(
+                backbone_grad_norm / max(encoder_param_norm, 1.0e-12)
+            )
             if training_cfg.get("grad_clip") is not None:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(training_cfg["grad_clip"]))
             optimizer.step()
@@ -585,6 +656,8 @@ def main() -> None:
         train_sample_batch = _to_device(train_sample_batch, device)
         train_sample = _sample_normalized_actions(model, train_sample_batch)
         train_sample_mse = float(torch.mean((train_sample - train_sample_batch["action"]) ** 2).item())
+        encoder_update_ratio = _parameter_update_ratio(backbone_params, encoder_reference)
+        encoder_feature_std = _encoder_feature_std(model, train_sample_batch["obs"])
 
         metrics = {
             "epoch": epoch,
@@ -601,6 +674,10 @@ def main() -> None:
             "grad_norm_head_max": float(np.max(epoch_grad_norm_head)),
             "grad_norm_backbone_mean": float(np.mean(epoch_grad_norm_backbone)),
             "grad_norm_backbone_max": float(np.max(epoch_grad_norm_backbone)),
+            "encoder_update_ratio": encoder_update_ratio,
+            "encoder_grad_param_ratio_mean": float(np.mean(epoch_encoder_grad_param_ratio)),
+            "encoder_feature_std": encoder_feature_std,
+            "encoder_backbone_frozen": int(freeze_encoder_backbone),
             "val_loss": float(val_metrics["loss"]),
             **{
                 f"val_{name}": value
@@ -706,6 +783,8 @@ def main() -> None:
         "encoder_type": str(model_cfg.get("encoder_type", "cnn")),
         "timm_model_name": str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),
         "timm_pretrained": bool(model_cfg.get("timm_pretrained", True)),
+        "freeze_encoder_backbone": freeze_encoder_backbone,
+        "backbone_parameter_count": backbone_parameter_count,
         "timm_tokens_per_frame": int(model_cfg.get("timm_tokens_per_frame", 1)),
         "timm_token_mode": str(model_cfg.get("timm_token_mode", "spatial")),
         "use_proprio": bool(model_cfg.get("use_proprio", True)),
