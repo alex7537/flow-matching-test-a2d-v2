@@ -18,7 +18,7 @@ data:
   aug_contrast: 0.4
   aug_saturation: 0.2
   aug_hue: 0.05
-  action_offset_steps: 0
+  action_offset_steps: 1
 policy:
   type: flow_matching
 model:
@@ -34,7 +34,7 @@ model:
   dropout: 0.0
   time_eps: 0.001
   num_inference_steps: 5
-  freeze_encoder_backbone: false
+  freeze_encoder_backbone: true
 training:
   seed: 42
   device: cuda
@@ -42,7 +42,7 @@ training:
   num_workers: 4
   pin_memory: true
   lr: 0.0001
-  backbone_lr_multiplier: 0.1
+  backbone_lr_multiplier: 0.0
   weight_decay: 0.0001
   betas:
   - 0.9
@@ -53,7 +53,7 @@ training:
   max_train_steps: null
   max_val_steps: null
   resume_from: null
-  run_name: cfm_66ep_vit_finetune_01x_seed42
+  run_name: cfm_66ep_vit_frozen_next_action_seed42
   output_dir: /share_data/zhangyurui/flow-matching-test-a2d-v2/runs/{run_name}
 logging:
   wandb:
@@ -61,16 +61,16 @@ logging:
     mode: online
     project: a2d-flow-matching
     entity: z1135783608-psibot
-    group: cfm-vit-freeze-ablation-20260720
+    group: cfm-next-action-offset-20260720
     job_type: train
     tags:
     - a800
     - rgb
     - flow-matching
     - timm
-    - vit-finetune
-    - lr-0.1x
-    - ablation
+    - vit-frozen
+    - next-action
+    - offset-1
     - seed42
 visualization:
   rerun:

@@ -157,6 +157,7 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
         image_size=int(data_cfg.get("image_size", 224)),
         history_steps=int(data_cfg.get("history_steps", 1)),
         action_horizon=int(data_cfg.get("action_horizon", 16)),
+        action_offset_steps=int(data_cfg.get("action_offset_steps", 1)),
         val_ratio=float(data_cfg.get("val_ratio", 0.1)),
         seed=seed,
         aug_brightness=float(data_cfg.get("aug_brightness", 0.2)),
@@ -397,6 +398,9 @@ def main() -> None:
     cfg = load_config(args.config, args.overrides)
     training_cfg = cfg["training"]
     data_cfg = cfg["data"]
+    # Materialize the temporal contract so checkpoints and exported bundles never
+    # have to guess whether chunk[0] means action[t] or action[t+1].
+    data_cfg["action_offset_steps"] = int(data_cfg.get("action_offset_steps", 1))
     model_cfg = cfg["model"]
     policy_cfg = materialize_policy_config(
         copy.deepcopy(cfg.get("policy", {"type": "flow_matching"}))
@@ -505,6 +509,7 @@ def main() -> None:
         "segmentation_version": SEGMENTATION_VERSION,
         "segmentation_motion_threshold": float(data_cfg.get("motion_threshold", 1.0e-4)),
         "segmentation_keyframe_threshold": float(data_cfg.get("transition_threshold", 0.1)),
+        "action_offset_steps": train_dataset.cfg.action_offset_steps,
         "dataset_manifest_sha256": split_manifest.get("dataset_manifest_sha256"),
         "split_manifest_sha256": split_manifest.get("split_manifest_sha256"),
     }
@@ -557,6 +562,7 @@ def main() -> None:
                 "obs_horizon": train_dataset.history_steps,
                 "action_dim": train_dataset.action_dim,
                 "action_horizon": train_dataset.action_horizon,
+                "action_offset_steps": train_dataset.cfg.action_offset_steps,
                 "action_layout": [
                     {"name": "arm2_pos", "dim": 7},
                     {"name": "hand2_pos", "dim": 6},
@@ -587,6 +593,16 @@ def main() -> None:
                 f"current policy_type={policy_type!r}"
             )
         checkpoint_provenance = checkpoint.get("data_provenance", {})
+        checkpoint_action_offset = int(
+            checkpoint_provenance.get(
+                "action_offset_steps",
+                checkpoint.get("config", {}).get("data", {}).get("action_offset_steps", 0),
+            )
+        )
+        if checkpoint_action_offset != data_provenance["action_offset_steps"]:
+            raise ValueError(
+                "resume checkpoint action_offset_steps does not match the current dataset"
+            )
         for key in ("stats_digest", "dataset_manifest_sha256", "split_manifest_sha256"):
             if checkpoint_provenance.get(key) != data_provenance.get(key):
                 raise ValueError(f"resume checkpoint {key} does not match the current dataset")
@@ -779,6 +795,7 @@ def main() -> None:
         "action_dim": train_dataset.action_dim,
         "history_steps": train_dataset.history_steps,
         "action_horizon": train_dataset.action_horizon,
+        "action_offset_steps": train_dataset.cfg.action_offset_steps,
         "policy_type": policy_type,
         "encoder_type": str(model_cfg.get("encoder_type", "cnn")),
         "timm_model_name": str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),

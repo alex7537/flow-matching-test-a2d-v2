@@ -32,6 +32,10 @@ index_cache.json + norm_stats.json
 - action：`arm2_pos(7) + hand2_pos(6)`
 
 action 固定为 13 维实际执行关节位置，归一化统计使用 train episodes 的逐维 min/max；稀疏的 `*_pos_target` 不参与训练标签。
+默认 `action_offset_steps=1`，因此时刻 `t` 的观测对应
+`action[t+1:t+1+action_horizon]`；输出 `chunk[0]` 是下一帧绝对关节位置，
+不再重复当前 proprio。旧 checkpoint 未记录该字段时按历史语义 `offset=0` 解释，不能
+与新窗口语义混用或直接 resume。
 
 模型条件输入默认包含配置选中的 RGB spatial tokens 和归一化 13 维 proprio state token。
 

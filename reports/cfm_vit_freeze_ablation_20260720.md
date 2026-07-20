@@ -57,3 +57,5 @@
   - best checkpoint SHA256：c95af39c14190ac91b2167048143c793cf1ed42f310743e0561c45be6181729e
 
 验收：两组本地 metrics.jsonl 均为 30 epochs；W&B 服务端 history 均为 30 epochs；最终 step 均为 7380。
+
+> Temporal-contract notice (2026-07-20): both checkpoints in this report were trained with the legacy offset=0 window, where chunk[0] reconstructs the current executed qpos. They remain valid evidence for the freeze ablation but are not next-action checkpoints. Use the new offset=1 config and retrain before deploying a server whose chunk[0] must mean the next frame.

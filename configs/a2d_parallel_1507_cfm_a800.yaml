@@ -5,6 +5,7 @@ data:
   val_ratio: 0.1
   history_steps: 1
   action_horizon: 16
+  action_offset_steps: 1
   transition_oversample_factor: 2
   transition_threshold: 0.1
   motion_threshold: 1.0e-4

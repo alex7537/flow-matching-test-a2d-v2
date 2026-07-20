@@ -109,6 +109,8 @@ def _inference_config(
         "action": {
             "dim": 13,
             "chunk_size": chunk_size,
+            # Missing means legacy checkpoints trained with action[t:t+H].
+            "offset_steps": int(data_cfg.get("action_offset_steps", 0)),
             "execute_horizon": execute_horizon,
             "target": "executed_joint_position",
             "range_guard_margin_ratio": float(bundle_cfg.get("action_range_guard_margin_ratio", 0.1)),

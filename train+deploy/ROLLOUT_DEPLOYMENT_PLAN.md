@@ -48,6 +48,7 @@ model:
 action:
   dim: 13
   chunk_size: <H>                  # 每次推理产出的 action chunk 长度
+  offset_steps: 1                  # chunk[0] 对应观测后的下一帧动作
   execute_horizon: <h>             # 实际执行几步后重新推理(h <= H)
   target: executed_joint_position # arm2_pos(7)+hand2_pos(6),与训练一致
   range_guard_margin_ratio: 0.1    # 反归一化输出超出训练范围外延即硬失败

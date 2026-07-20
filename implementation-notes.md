@@ -116,3 +116,12 @@ This file records implementation decisions, deviations from the agreed plan, and
 - Conservative action: Do not restart or duplicate the live training process; query the known status-file path directly and verify PID, GPU allocation, log output, and W&B URL.
 - Impact: Display command only; training script, configuration, process, and outputs were unaffected.
 - Verification: Both runs subsequently completed and passed local/W&B history checks.
+
+### 2026-07-20 — Shift action chunks to the next frame
+
+- Decision: Make action_offset_steps=1 the dataset default, so obs[t] maps to action[t+1:t+1+H] and chunk[0] is the next-frame absolute joint position.
+- Scope: Shift action slicing, complete-window filtering, segment/keyframe window labeling, checkpoint provenance, resume compatibility, summary metadata, and exported rollout config together.
+- Backward compatibility: Missing action_offset_steps in an old checkpoint is interpreted as legacy offset=0. The completed ViT freeze ablation configs are pinned to offset=0 and must not be resumed under offset=1.
+- Data impact: Processed HDF5 files and train min/max stats remain valid; training windows lose the final observation frame per episode and the model must be retrained for the new temporal contract.
+- Verification: Unit test constructs qpos/action rows with known frame indices and proves the default sample maps state[0] to action[1:3].
+- New training config: configs/a2d_parallel_1507_cfm_a800_vit_frozen_next_action.yaml.
