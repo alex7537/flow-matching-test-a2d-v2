@@ -125,3 +125,11 @@ This file records implementation decisions, deviations from the agreed plan, and
 - Data impact: Processed HDF5 files and train min/max stats remain valid; training windows lose the final observation frame per episode and the model must be retrained for the new temporal contract.
 - Verification: Unit test constructs qpos/action rows with known frame indices and proves the default sample maps state[0] to action[1:3].
 - New training config: configs/a2d_parallel_1507_cfm_a800_vit_frozen_next_action.yaml.
+
+### 2026-07-20 — Eval Bundle SCP interrupted
+
+- Planned approach: Copy the verified A800 inference archive directly to the local eval-bundle directory and validate its SHA256 before extraction.
+- Edge case / trigger: The first local file was only about 72 MB and its SHA256 did not match the verified remote archive, indicating an interrupted transfer.
+- Conservative action: Do not extract, delete, or overwrite the partial file; rename it with a .partial suffix, redownload to a temporary path, and only atomically promote it after remote/local byte size and SHA256 both match.
+- Impact: No bundle content was trusted or extracted from the incomplete transfer.
+- Expected remote SHA256: 6225396967997d96ff4911e186612a7535091f9395d4f424f38481c56afd2175.
