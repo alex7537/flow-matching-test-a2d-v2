@@ -91,3 +91,11 @@ This file records implementation decisions, deviations from the agreed plan, and
 - Conservative action: Abort the incomplete am operation and transfer the tested branch as a Git bundle, preserving the exact commit objects without changing local or global Git identity.
 - Impact: No code or training output was produced by the failed attempt; remote branch creation is retained.
 - Verification: Require remote HEAD to match the local tested commit and remote worktree to be clean before any GPU smoke.
+
+### 2026-07-20 — CFM ViT ablation preflight verification
+
+- Repository tests: PASS — 20 tests passed locally and on the A800 branch.
+- Provenance: PASS — local and A800 code initially matched commit 84cc6c332fb7a0b29f3bc1840a6147b63fbc6fe7 before GPU smoke.
+- Frozen GPU smoke: PASS — backbone gradient norm 0, encoder update ratio 0, W&B online run https://wandb.ai/z1135783608-psibot/a2d-flow-matching/runs/sgdvjh4s.
+- Fine-tuned GPU smoke: PASS — backbone gradient norm 7.982551, encoder update ratio 1.272233e-4, W&B online run https://wandb.ai/z1135783608-psibot/a2d-flow-matching/runs/eqkxg0zq.
+- Gate decision: Start the two 30-epoch runs sequentially on the same idle NVIDIA A800-SXM4-80GB.
