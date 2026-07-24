@@ -27,6 +27,7 @@ import hashlib
 import json
 import random
 import warnings
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -82,6 +83,7 @@ class A2DConfig:
     num_workers: int = 8
     pin_memory: bool = True
     prefetch_factor: int = 4
+    max_open_hdf5_files: int = 64
     # augmentation (train only)
     aug_brightness: float = 0.2
     aug_contrast: float = 0.4
@@ -423,26 +425,47 @@ class A2DFlowDataset(Dataset):
         self.episodes = episodes
         self.stats = norm_stats
         self.train = train
+        self.epoch = 0
         # flat sample index: (ep_idx, t); every t with a full history is valid
         self.samples: list[tuple[int, int]] = []
         h = cfg.history_steps - 1
         for i, e in enumerate(episodes):
             for t in range(h, e["length"] - cfg.action_offset_steps):
                 self.samples.append((i, t))
-        # per-worker lazy handles — NEVER open h5py.File before fork
-        self._handles: dict[int, h5py.File] = {}
+        if cfg.max_open_hdf5_files < 1:
+            raise ValueError("max_open_hdf5_files must be >= 1")
+        # Per-worker lazy LRU handles — NEVER open h5py.File before fork. Keep
+        # this bounded because large datasets can exceed the worker fd limit.
+        self._handles: OrderedDict[int, h5py.File] = OrderedDict()
 
     def __len__(self):
         return len(self.samples)
 
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
     # ---- h5 handle management ------------------------------------------- #
     def _file(self, ep_idx: int) -> h5py.File:
         f = self._handles.get(ep_idx)
-        if f is None:
-            f = h5py.File(self.episodes[ep_idx]["path"], "r",
-                          libver="latest", swmr=True)
-            self._handles[ep_idx] = f
+        if f is not None:
+            self._handles.move_to_end(ep_idx)
+            return f
+        if len(self._handles) >= self.cfg.max_open_hdf5_files:
+            _, oldest = self._handles.popitem(last=False)
+            oldest.close()
+        f = h5py.File(self.episodes[ep_idx]["path"], "r",
+                      libver="latest", swmr=True)
+        self._handles[ep_idx] = f
         return f
+
+    def close(self) -> None:
+        handles = getattr(self, "_handles", None)
+        while handles:
+            _, handle = handles.popitem(last=False)
+            handle.close()
+
+    def __del__(self) -> None:
+        self.close()
 
     # ---- image loading --------------------------------------------------- #
     def _decode(self, buf: np.ndarray) -> np.ndarray:
@@ -498,7 +521,10 @@ class A2DFlowDataset(Dataset):
         ep_idx, t = self.samples[idx]
         ep = self.episodes[ep_idx]
         f = self._file(ep_idx)
-        rng = np.random.default_rng()                       # per-call, fork-safe
+        augmentation_seed = (
+            int(cfg.seed) * 1_000_003 + self.epoch * 100_003 + int(idx)
+        ) % (2**63 - 1)
+        rng = np.random.default_rng(augmentation_seed)
         aug_params = {cam: self._sample_aug_params(rng) for cam in cfg.image_keys}
 
         # images: history frames per camera, shared aug params per sample is
@@ -629,6 +655,7 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
             "obs": obs,
             "action": sample["action"],
             "segment_type": torch.tensor(self.segment_by_sample[sample_key], dtype=torch.long),
+            "sample_index": torch.tensor(idx, dtype=torch.long),
         }
 
     def export_stats(self) -> dict[str, torch.Tensor]:

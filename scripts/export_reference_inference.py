@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import random
@@ -30,12 +31,17 @@ def main() -> None:
     parser.add_argument("--episode-index", type=int, default=0)
     parser.add_argument("--frame", type=int, default=0)
     parser.add_argument("--seed", type=int, default=20260715)
+    parser.add_argument("--num-inference-steps", type=int)
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
 
     ckpt_path = Path(args.ckpt).expanduser().resolve()
     payload = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    cfg = payload["config"]
+    cfg = copy.deepcopy(payload["config"])
+    if args.num_inference_steps is not None:
+        if args.num_inference_steps <= 0:
+            raise ValueError("num-inference-steps must be > 0")
+        cfg["model"]["num_inference_steps"] = int(args.num_inference_steps)
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     dataset = _build_dataset(
         data_cfg=cfg["data"],
@@ -88,6 +94,7 @@ def main() -> None:
         "episode": episode["file_name"],
         "frame": args.frame,
         "seed": args.seed,
+        "num_inference_steps": int(cfg["model"].get("num_inference_steps", 40)),
         "tf32": False,
         "torch_version": torch.__version__,
         "timm_version": timm.__version__,

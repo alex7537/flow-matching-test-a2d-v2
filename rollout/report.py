@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 
 
-def build_report(results: list[dict[str, Any]]) -> dict[str, Any]:
+def build_report(
+    results: list[dict[str, Any]],
+    *,
+    run_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not results:
         raise ValueError("results.jsonl contains no results")
 
@@ -25,10 +29,21 @@ def build_report(results: list[dict[str, Any]]) -> dict[str, Any]:
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for result in results:
         groups[str(result.get("metric_group", "default"))].append(result)
-    return {
+    report = {
         "overall": summarize(results),
         "metric_groups": {name: summarize(items) for name, items in sorted(groups.items())},
     }
+    if run_metadata is not None:
+        report["provenance"] = {
+            key: run_metadata.get(key)
+            for key in (
+                "weights_variant",
+                "checkpoint_selection",
+                "source_checkpoint_sha256",
+                "bundle_checkpoint_sha256",
+            )
+        }
+    return report
 
 
 def main() -> None:
@@ -40,7 +55,9 @@ def main() -> None:
     if input_path.is_dir():
         input_path = input_path / "results.jsonl"
     results = [json.loads(line) for line in input_path.read_text().splitlines() if line.strip()]
-    report = build_report(results)
+    metadata_path = input_path.with_name("run_metadata.json")
+    run_metadata = json.loads(metadata_path.read_text()) if metadata_path.is_file() else None
+    report = build_report(results, run_metadata=run_metadata)
     rendered = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     output_path = args.out or input_path.with_name("report.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)

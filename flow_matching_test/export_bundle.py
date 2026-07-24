@@ -137,10 +137,13 @@ def export_eval_bundle(
     out_dir: Path,
     *,
     execute_horizon: int | None = None,
+    num_inference_steps: int | None = None,
     camera_resolutions: dict[str, tuple[int, int]] | None = None,
     joint_order: list[str] | None = None,
     data_version: str = "unknown",
     archive: bool = False,
+    weights_variant: str = "raw",
+    checkpoint_selection: str | None = None,
 ) -> Path:
     checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     required = {
@@ -150,6 +153,22 @@ def export_eval_bundle(
     missing = sorted(required.difference(checkpoint))
     if missing:
         raise ValueError(f"checkpoint is missing required keys: {missing}")
+    weights_variant = str(weights_variant).strip().lower()
+    if weights_variant not in {"raw", "ema"}:
+        raise ValueError("weights_variant must be 'raw' or 'ema'")
+    if weights_variant == "ema" and checkpoint.get("ema_model_state_dict") is None:
+        raise ValueError("checkpoint does not contain EMA weights")
+    checkpoint_selection = str(
+        checkpoint_selection
+        or checkpoint.get("selection_criterion", "legacy_unspecified")
+    ).strip()
+    if not checkpoint_selection:
+        raise ValueError("checkpoint_selection must not be empty")
+    exported_state = (
+        checkpoint["ema_model_state_dict"]
+        if weights_variant == "ema"
+        else checkpoint["model_state_dict"]
+    )
 
     chunk_size = int(checkpoint["config"]["data"]["action_horizon"])
     config = _inference_config(
@@ -158,6 +177,10 @@ def export_eval_bundle(
         camera_resolutions=camera_resolutions or {},
         joint_order=joint_order or list(DEFAULT_JOINT_ORDER),
     )
+    if num_inference_steps is not None:
+        if int(num_inference_steps) <= 0:
+            raise ValueError("num_inference_steps must be > 0")
+        config["model"]["cfm"]["num_inference_steps"] = int(num_inference_steps)
 
     if out_dir.exists():
         if any(out_dir.iterdir()):
@@ -165,7 +188,7 @@ def export_eval_bundle(
     else:
         out_dir.mkdir(parents=True)
 
-    torch.save(checkpoint["model_state_dict"], out_dir / "ckpt.pt")
+    torch.save(exported_state, out_dir / "ckpt.pt")
     (out_dir / "norm_stats.json").write_text(
         json.dumps(checkpoint["normalizer"], ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -190,6 +213,9 @@ def export_eval_bundle(
         "train_epoch": int(checkpoint.get("epoch", -1)),
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_checkpoint": str(ckpt_path.resolve()),
+        "source_checkpoint_sha256": _sha256(ckpt_path),
+        "source_checkpoint_selection": checkpoint_selection,
+        "weights_variant": weights_variant,
         "stats_digest": checkpoint["stats_digest"],
         "data_provenance": checkpoint["data_provenance"],
         "training_environment": checkpoint["training_environment"],
@@ -199,7 +225,8 @@ def export_eval_bundle(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     (out_dir / "README.md").write_text(
-        f"{manifest['policy_type']} rollout bundle from `{ckpt_path.name}` at step "
+        f"{manifest['policy_type']} rollout bundle using {weights_variant} weights from "
+        f"`{ckpt_path.name}` ({manifest['source_checkpoint_selection']}) at step "
         f"{manifest['train_step']}.\n",
         encoding="utf-8",
     )
@@ -242,19 +269,28 @@ def main() -> None:
     parser.add_argument("--ckpt", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--execute-horizon", type=int)
+    parser.add_argument("--num-inference-steps", type=int)
     parser.add_argument("--camera-resolution", action="append", default=[])
     parser.add_argument("--joint-order", nargs=13, default=DEFAULT_JOINT_ORDER)
     parser.add_argument("--data-version", default="unknown")
+    parser.add_argument("--weights-variant", choices=["raw", "ema"], default="raw")
+    parser.add_argument(
+        "--checkpoint-selection",
+        help="Explicit selection criterion for legacy checkpoints that do not record it.",
+    )
     parser.add_argument("--archive", action="store_true")
     args = parser.parse_args()
     output = export_eval_bundle(
         args.ckpt,
         args.out,
         execute_horizon=args.execute_horizon,
+        num_inference_steps=args.num_inference_steps,
         camera_resolutions=_camera_resolutions(args.camera_resolution),
         joint_order=list(args.joint_order),
         data_version=args.data_version,
         archive=args.archive,
+        weights_variant=args.weights_variant,
+        checkpoint_selection=args.checkpoint_selection,
     )
     print(output)
 

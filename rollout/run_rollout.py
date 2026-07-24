@@ -70,6 +70,19 @@ def _package_version(name: str) -> str | None:
         return None
 
 
+def _bundle_provenance(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "weights_variant": manifest.get("weights_variant", "legacy_unspecified"),
+        "checkpoint_selection": manifest.get(
+            "source_checkpoint_selection", "legacy_unspecified"
+        ),
+        "source_checkpoint_sha256": manifest.get("source_checkpoint_sha256"),
+        "bundle_checkpoint_sha256": manifest.get("files", {})
+        .get("ckpt.pt", {})
+        .get("sha256"),
+    }
+
+
 def run(
     bundle_dir: Path,
     grid_path: Path,
@@ -122,6 +135,7 @@ def run(
         "execute_horizon": horizon,
         "replan": execution_cfg.get("replan", "after_execute_horizon"),
         "physics_snapshot": grid.get("sim", {}).get("physics_snapshot", {}),
+        **_bundle_provenance(policy.manifest),
     }
     (out_dir / "run_metadata.json").write_text(
         json.dumps(run_metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

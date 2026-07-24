@@ -8,6 +8,7 @@ from flow_matching_test.policies.factory import build_policy, resolve_policy_typ
 from flow_matching_test.policies.flow_matching import FlowMatchingPolicy
 from flow_matching_test.policies.diffusion import DiffusionPolicy
 from flow_matching_test.policies.imle import ImlePolicy
+from flow_matching_test.train import evaluate
 
 
 def _policy(policy_cfg: dict[str, object] | None = None):
@@ -75,6 +76,32 @@ def test_policy_loss_backprop_sampling_and_parameter_groups() -> None:
     sampled = policy.sample_actions(batch["obs"])
     assert sampled.action_normalized.shape == (2, 4, 13)
     assert sampled.action.shape == (2, 4, 13)
+
+
+def test_seeded_cfm_validation_is_reproducible() -> None:
+    policy = _policy()
+    batch = _batch()
+    batch["sample_index"] = torch.tensor([3, 9])
+
+    first = evaluate(
+        model=policy,
+        loader=[batch],
+        device=torch.device("cpu"),
+        deterministic_seed=42,
+        sample_draws=3,
+    )
+    torch.manual_seed(999)
+    second = evaluate(
+        model=policy,
+        loader=[batch],
+        device=torch.device("cpu"),
+        deterministic_seed=42,
+        sample_draws=3,
+    )
+
+    assert first.keys() == second.keys()
+    for key in first:
+        assert first[key] == pytest.approx(second[key], rel=1.0e-5, abs=1.0e-7)
 
 
 def test_frozen_backbone_is_excluded_from_optimizer_groups() -> None:

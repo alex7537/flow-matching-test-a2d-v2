@@ -9,8 +9,11 @@ import os
 import platform
 import random
 import sys
+import threading
 import time
+import traceback
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,8 +31,10 @@ from flow_matching_test.policies.factory import (
     materialize_policy_config,
     resolve_policy_type,
 )
+from flow_matching_test.policies.flow_matching import FlowMatchingPolicy
 from flow_matching_test.rerun_logger import RerunTrainVisualizer
 from flow_matching_test.segmentation import SEGMENTATION_VERSION
+from flow_matching_test.training_watchdog import StallDetails, TrainingWatchdog
 from flow_matching_test.wandb_logger import WandbLogger
 
 
@@ -103,6 +108,25 @@ def _parameter_update_ratio(
 
 
 @torch.no_grad()
+def _update_ema_model(
+    ema_model: ActionPolicy,
+    model: ActionPolicy,
+    *,
+    decay: float,
+) -> None:
+    ema_state = ema_model.state_dict()
+    model_state = model.state_dict()
+    if ema_state.keys() != model_state.keys():
+        raise ValueError("EMA model state does not match the training model")
+    for name, ema_value in ema_state.items():
+        model_value = model_state[name].detach()
+        if ema_value.is_floating_point():
+            ema_value.mul_(decay).add_(model_value, alpha=1.0 - decay)
+        else:
+            ema_value.copy_(model_value)
+
+
+@torch.no_grad()
 def _encoder_feature_std(model: ActionPolicy, obs: dict[str, torch.Tensor]) -> float:
     """Mean per-channel std of raw visual encoder tokens on one diagnostic batch."""
     composer = getattr(model, "obs_composer", None)
@@ -169,6 +193,7 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
         transition_threshold=float(data_cfg.get("transition_threshold", 0.1)),
         motion_threshold=float(data_cfg.get("motion_threshold", 1.0e-4)),
         allow_duplicate_episodes=bool(data_cfg.get("allow_duplicate_episodes", False)),
+        max_open_hdf5_files=int(data_cfg.get("max_open_hdf5_files", 64)),
         range_eps=float(data_cfg.get("range_eps", 1.0e-4)),
         norm_stats=str(data_cfg.get("norm_stats", "norm_stats.json")),
         dataset_manifest=data_cfg.get("dataset_manifest"),
@@ -364,7 +389,12 @@ def evaluate(
     loader: DataLoader,
     device: torch.device,
     max_steps: int | None = None,
+    heartbeat: Callable[[int], None] | None = None,
+    deterministic_seed: int | None = None,
+    sample_draws: int = 1,
 ) -> dict[str, float]:
+    if sample_draws < 1:
+        raise ValueError("sample_draws must be >= 1")
     model.eval()
     losses: list[float] = []
     component_values: dict[str, list[float]] = defaultdict(list)
@@ -372,14 +402,46 @@ def evaluate(
     for step_idx, batch in enumerate(loader):
         if max_steps is not None and step_idx >= max_steps:
             break
+        if heartbeat is not None:
+            heartbeat(step_idx)
         batch = _to_device(batch, device)
-        loss, components = model.compute_loss(batch)
+        sample_indices = batch.get("sample_index")
+        if deterministic_seed is not None:
+            if not isinstance(sample_indices, torch.Tensor):
+                raise KeyError("deterministic validation requires batch['sample_index']")
+            indices = [int(value) for value in sample_indices.detach().cpu().tolist()]
+            loss_seeds = [
+                (int(deterministic_seed) * 1_000_003 + index * 100_003 + 17) % (2**63 - 1)
+                for index in indices
+            ]
+        else:
+            indices = []
+            loss_seeds = []
+        if deterministic_seed is not None and type(model) is FlowMatchingPolicy:
+            loss, components = model.compute_loss_seeded(batch, loss_seeds)
+        else:
+            loss, components = model.compute_loss(batch)
         losses.append(float(loss.detach().item()))
         for name, value in components.items():
             if value is not None:
                 component_values[name].append(float(value))
-        sampled = _sample_normalized_actions(model, batch)
-        sample_mse.append(float(torch.mean((sampled - batch["action"]) ** 2).item()))
+        draw_mse = []
+        for draw in range(sample_draws):
+            if deterministic_seed is not None and type(model) is FlowMatchingPolicy:
+                sample_seeds = [
+                    (
+                        int(deterministic_seed) * 1_000_003
+                        + index * 100_003
+                        + (draw + 1) * 10_007
+                    )
+                    % (2**63 - 1)
+                    for index in indices
+                ]
+                sampled = model.sample_actions_seeded(batch["obs"], sample_seeds).action_normalized
+            else:
+                sampled = _sample_normalized_actions(model, batch)
+            draw_mse.append(float(torch.mean((sampled - batch["action"]) ** 2).item()))
+        sample_mse.append(float(np.mean(draw_mse)))
     if not losses:
         return {"loss": 0.0, "sample_action_mse": 0.0}
     return {
@@ -401,6 +463,11 @@ def main() -> None:
     # Materialize the temporal contract so checkpoints and exported bundles never
     # have to guess whether chunk[0] means action[t] or action[t+1].
     data_cfg["action_offset_steps"] = int(data_cfg.get("action_offset_steps", 1))
+    data_cfg["max_open_hdf5_files"] = int(data_cfg.get("max_open_hdf5_files", 64))
+    training_cfg["watchdog_timeout_sec"] = float(training_cfg.get("watchdog_timeout_sec", 300.0))
+    training_cfg["watchdog_check_interval_sec"] = float(
+        training_cfg.get("watchdog_check_interval_sec", 10.0)
+    )
     model_cfg = cfg["model"]
     policy_cfg = materialize_policy_config(
         copy.deepcopy(cfg.get("policy", {"type": "flow_matching"}))
@@ -410,6 +477,25 @@ def main() -> None:
     started_at = time.time()
 
     seed = int(training_cfg.get("seed", 42))
+    validation_cfg = cfg.setdefault("validation", {})
+    validation_cfg["deterministic"] = bool(
+        validation_cfg.get("deterministic", policy_type == "flow_matching")
+    )
+    validation_cfg["seed"] = int(validation_cfg.get("seed", seed))
+    validation_cfg["sample_draws"] = int(validation_cfg.get("sample_draws", 3))
+    if validation_cfg["sample_draws"] < 1:
+        raise ValueError("validation.sample_draws must be >= 1")
+    if validation_cfg["deterministic"] and policy_type != "flow_matching":
+        raise ValueError("deterministic validation is currently implemented only for flow_matching")
+    training_cfg["ema_enabled"] = bool(training_cfg.get("ema_enabled", True))
+    training_cfg["ema_decay"] = float(training_cfg.get("ema_decay", 0.999))
+    if not 0.0 <= training_cfg["ema_decay"] < 1.0:
+        raise ValueError("training.ema_decay must be in [0,1)")
+    configured_bundle_variant = str(
+        cfg.get("deployment", {}).get("eval_bundle", {}).get("weights_variant", "raw")
+    ).strip().lower()
+    if configured_bundle_variant == "ema" and not training_cfg["ema_enabled"]:
+        raise ValueError("EMA bundle export requires training.ema_enabled=true")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -493,9 +579,16 @@ def main() -> None:
     experiment_index_path = output_dir.parent / "experiment_results.jsonl"
     resume_events_path = output_dir / "resume_events.jsonl"
     best_val = float("inf")
+    best_action_mse = float("inf")
+    best_ema_action_mse = float("inf")
     best_model_state = None
+    best_action_mse_model_state = None
     best_metrics: dict[str, Any] | None = None
+    best_action_mse_metrics: dict[str, Any] | None = None
+    best_ema_action_mse_metrics: dict[str, Any] | None = None
     last_metrics: dict[str, Any] | None = None
+    ema_model: ActionPolicy | None = None
+    resume_ema_state: dict[str, Any] | None = None
     global_step = 0
     start_epoch = 0
     max_train_steps = training_cfg.get("max_train_steps")
@@ -530,9 +623,73 @@ def main() -> None:
     )
     _restore_rng_state(rng_before_wandb)
 
-    def checkpoint_payload(model_state: dict[str, Any], epoch: int) -> dict[str, Any]:
+    failure_reported = threading.Event()
+
+    def report_failure(*, kind: str, message: str, stage: str, step: int) -> None:
+        if failure_reported.is_set():
+            return
+        failure_reported.set()
+        payload = {
+            "run_name": run_name,
+            "failed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "kind": kind,
+            "message": message,
+            "stage": stage,
+            "global_step": int(step),
+        }
+        failure_path = output_dir / "failure.json"
+        temporary = failure_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(failure_path)
+        print("TRAINING_FAILURE " + json.dumps(payload, ensure_ascii=False), flush=True)
+        wandb_logger.alert(
+            title=f"Training failed: {run_name}",
+            text=f"{kind} during {stage} at step {step}:\n{message[:4000]}",
+            level="ERROR",
+        )
+        wandb_logger.update_summary({"status": "failed", "failure": payload})
+        wandb_logger.finish(exit_code=1)
+
+    original_excepthook = sys.excepthook
+
+    def report_unhandled_exception(exc_type, exc_value, exc_traceback) -> None:
+        if not issubclass(exc_type, KeyboardInterrupt):
+            report_failure(
+                kind="unhandled_exception",
+                message="".join(traceback.format_exception(exc_type, exc_value, exc_traceback)),
+                stage="main_thread",
+                step=global_step,
+            )
+        original_excepthook(exc_type, exc_value, exc_traceback)
+
+    sys.excepthook = report_unhandled_exception
+
+    def report_stall(details: StallDetails) -> None:
+        report_failure(
+            kind="watchdog_timeout",
+            message=details.message,
+            stage=details.stage,
+            step=details.step,
+        )
+
+    watchdog = TrainingWatchdog(
+        timeout_seconds=float(training_cfg["watchdog_timeout_sec"]),
+        check_interval_seconds=float(training_cfg["watchdog_check_interval_sec"]),
+        on_stall=report_stall,
+    )
+
+    def checkpoint_payload(
+        model_state: dict[str, Any],
+        epoch: int,
+        *,
+        selection_criterion: str,
+    ) -> dict[str, Any]:
         return {
             "model_state_dict": model_state,
+            "selection_criterion": selection_criterion,
             "policy_type": policy_type,
             "policy_spec": {"type": policy_type},
             "optimizer_state_dict": optimizer.state_dict(),
@@ -541,9 +698,17 @@ def main() -> None:
             "global_step": global_step,
             "epoch": epoch,
             "best_val": best_val,
+            "best_action_mse": best_action_mse,
+            "best_ema_action_mse": best_ema_action_mse,
             "best_metrics": best_metrics,
+            "best_action_mse_metrics": best_action_mse_metrics,
+            "best_ema_action_mse_metrics": best_ema_action_mse_metrics,
             "last_metrics": last_metrics,
             "best_model_state_dict": best_model_state,
+            "best_action_mse_model_state_dict": best_action_mse_model_state,
+            "ema_model_state_dict": (
+                ema_model.state_dict() if ema_model is not None else None
+            ),
             "rng_state": _rng_state(),
             "action_mean": train_dataset.action_mean,
             "action_std": train_dataset.action_std,
@@ -580,7 +745,46 @@ def main() -> None:
             },
         }
 
+    init_from = training_cfg.get("init_from")
     resume_from = training_cfg.get("resume_from")
+    if init_from and resume_from:
+        raise ValueError("training.init_from and training.resume_from are mutually exclusive")
+    if init_from:
+        init_path = Path(str(init_from)).expanduser().resolve()
+        checkpoint = torch.load(init_path, map_location=device, weights_only=False)
+        checkpoint_policy_type = resolve_policy_type(
+            checkpoint.get("policy_spec", {"type": checkpoint.get("policy_type", "flow_matching")})
+        )
+        if checkpoint_policy_type != policy_type:
+            raise ValueError(
+                f"init checkpoint policy_type={checkpoint_policy_type!r} does not match "
+                f"current policy_type={policy_type!r}"
+            )
+        checkpoint_provenance = checkpoint.get("data_provenance", {})
+        checkpoint_action_offset = int(
+            checkpoint_provenance.get(
+                "action_offset_steps",
+                checkpoint.get("config", {}).get("data", {}).get("action_offset_steps", 0),
+            )
+        )
+        if checkpoint_action_offset != data_provenance["action_offset_steps"]:
+            raise ValueError(
+                "init checkpoint action_offset_steps does not match the current dataset"
+            )
+        for key in ("stats_digest", "dataset_manifest_sha256", "split_manifest_sha256"):
+            if checkpoint_provenance.get(key) != data_provenance.get(key):
+                raise ValueError(f"init checkpoint {key} does not match the current dataset")
+        model.load_state_dict(checkpoint["model_state_dict"])
+        init_event = {
+            "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "checkpoint": str(init_path),
+            "checkpoint_sha256": _sha256(init_path),
+            "source_epoch": int(checkpoint.get("epoch", -1)),
+            "source_global_step": int(checkpoint.get("global_step", 0)),
+            "optimizer_scheduler_reset": True,
+        }
+        _append_jsonl(output_dir / "init_events.jsonl", init_event)
+        print("INIT_MODEL_ONLY_OK " + json.dumps(init_event, ensure_ascii=False))
     if resume_from:
         resume_path = Path(str(resume_from)).expanduser().resolve()
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
@@ -612,9 +816,35 @@ def main() -> None:
         global_step = int(checkpoint["global_step"])
         start_epoch = int(checkpoint["epoch"]) + 1
         best_val = float(checkpoint.get("best_val", float("inf")))
+        checkpoint_best_mse_metrics = checkpoint.get("best_action_mse_metrics")
+        if checkpoint_best_mse_metrics is None:
+            checkpoint_best_mse_metrics = checkpoint.get("best_metrics")
+        best_action_mse = float(
+            checkpoint.get(
+                "best_action_mse",
+                (
+                    checkpoint_best_mse_metrics.get("val_sample_action_mse", float("inf"))
+                    if checkpoint_best_mse_metrics is not None
+                    else float("inf")
+                ),
+            )
+        )
         best_metrics = copy.deepcopy(checkpoint.get("best_metrics"))
+        best_action_mse_metrics = copy.deepcopy(checkpoint_best_mse_metrics)
+        best_ema_action_mse = float(
+            checkpoint.get("best_ema_action_mse", float("inf"))
+        )
+        best_ema_action_mse_metrics = copy.deepcopy(
+            checkpoint.get("best_ema_action_mse_metrics")
+        )
         last_metrics = copy.deepcopy(checkpoint.get("last_metrics"))
         best_model_state = copy.deepcopy(checkpoint.get("best_model_state_dict"))
+        best_action_mse_model_state = copy.deepcopy(
+            checkpoint.get("best_action_mse_model_state_dict")
+        )
+        if best_action_mse_model_state is None:
+            best_action_mse_model_state = copy.deepcopy(best_model_state)
+        resume_ema_state = checkpoint.get("ema_model_state_dict")
         _restore_rng_state(checkpoint["rng_state"])
         resume_event = {
             "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -627,19 +857,32 @@ def main() -> None:
         _append_jsonl(resume_events_path, resume_event)
         print("RESUME_OK " + json.dumps(resume_event, ensure_ascii=False))
 
+    if training_cfg["ema_enabled"]:
+        ema_model = copy.deepcopy(model).to(device)
+        if resume_ema_state is not None:
+            ema_model.load_state_dict(resume_ema_state)
+        ema_model.requires_grad_(False)
+        ema_model.eval()
+
+    watchdog.heartbeat(stage="training_start", step=global_step)
+    watchdog.start()
     for epoch in range(start_epoch, int(training_cfg.get("num_epochs", 50))):
+        watchdog.heartbeat(stage=f"train_epoch_{epoch}", step=global_step)
+        train_dataset.set_epoch(epoch)
         model.train()
         epoch_losses: list[float] = []
         epoch_components: dict[str, list[float]] = defaultdict(list)
         epoch_grad_norm_head: list[float] = []
         epoch_grad_norm_backbone: list[float] = []
         epoch_encoder_grad_param_ratio: list[float] = []
+        epoch_grad_clip_triggered: list[float] = []
         encoder_reference = _snapshot_parameters(backbone_params)
         encoder_param_norm = _parameter_l2_norm(backbone_params)
 
         for batch_idx, batch in enumerate(train_loader):
             if max_train_steps is not None and batch_idx >= int(max_train_steps):
                 break
+            watchdog.heartbeat(stage=f"train_epoch_{epoch}", step=global_step)
             batch = _to_device(batch, device)
             loss, components = model.compute_loss(batch)
             optimizer.zero_grad(set_to_none=True)
@@ -651,9 +894,17 @@ def main() -> None:
                 backbone_grad_norm / max(encoder_param_norm, 1.0e-12)
             )
             if training_cfg.get("grad_clip") is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), float(training_cfg["grad_clip"]))
+                grad_clip = float(training_cfg["grad_clip"])
+                total_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                epoch_grad_clip_triggered.append(float(total_grad_norm > grad_clip))
             optimizer.step()
             scheduler.step()
+            if ema_model is not None:
+                _update_ema_model(
+                    ema_model,
+                    model,
+                    decay=float(training_cfg["ema_decay"]),
+                )
 
             epoch_losses.append(float(loss.detach().item()))
             for name, value in components.items():
@@ -666,7 +917,36 @@ def main() -> None:
             loader=val_loader,
             device=device,
             max_steps=int(max_val_steps) if max_val_steps is not None else None,
+            heartbeat=lambda step: watchdog.heartbeat(
+                stage=f"val_epoch_{epoch}", step=step
+            ),
+            deterministic_seed=(
+                int(validation_cfg["seed"]) if validation_cfg["deterministic"] else None
+            ),
+            sample_draws=int(validation_cfg["sample_draws"]),
         )
+        ema_val_metrics = None
+        if ema_model is not None:
+            rng_before_ema_evaluation = _rng_state()
+            try:
+                ema_val_metrics = evaluate(
+                    model=ema_model,
+                    loader=val_loader,
+                    device=device,
+                    max_steps=int(max_val_steps) if max_val_steps is not None else None,
+                    heartbeat=lambda step: watchdog.heartbeat(
+                        stage=f"ema_val_epoch_{epoch}", step=step
+                    ),
+                    deterministic_seed=(
+                        int(validation_cfg["seed"])
+                        if validation_cfg["deterministic"]
+                        else None
+                    ),
+                    sample_draws=int(validation_cfg["sample_draws"]),
+                )
+            finally:
+                _restore_rng_state(rng_before_ema_evaluation)
+        watchdog.heartbeat(stage=f"epoch_{epoch}_diagnostics", step=global_step)
         train_sample_loader = DataLoader(train_dataset, batch_size=min(16, int(training_cfg.get("batch_size", 64))), shuffle=False)
         train_sample_batch = next(iter(train_sample_loader))
         train_sample_batch = _to_device(train_sample_batch, device)
@@ -690,6 +970,11 @@ def main() -> None:
             "grad_norm_head_max": float(np.max(epoch_grad_norm_head)),
             "grad_norm_backbone_mean": float(np.mean(epoch_grad_norm_backbone)),
             "grad_norm_backbone_max": float(np.max(epoch_grad_norm_backbone)),
+            "grad_clip_trigger_rate": (
+                float(np.mean(epoch_grad_clip_triggered))
+                if epoch_grad_clip_triggered
+                else 0.0
+            ),
             "encoder_update_ratio": encoder_update_ratio,
             "encoder_grad_param_ratio_mean": float(np.mean(epoch_encoder_grad_param_ratio)),
             "encoder_feature_std": encoder_feature_std,
@@ -701,6 +986,21 @@ def main() -> None:
                 if name not in {"loss", "sample_action_mse"}
             },
             "val_sample_action_mse": float(val_metrics["sample_action_mse"]),
+            **(
+                {
+                    "ema_val_loss": float(ema_val_metrics["loss"]),
+                    **{
+                        f"ema_val_{name}": value
+                        for name, value in ema_val_metrics.items()
+                        if name not in {"loss", "sample_action_mse"}
+                    },
+                    "ema_val_sample_action_mse": float(
+                        ema_val_metrics["sample_action_mse"]
+                    ),
+                }
+                if ema_val_metrics is not None
+                else {}
+            ),
         }
         last_metrics = copy.deepcopy(metrics)
         print(json.dumps(metrics, ensure_ascii=False))
@@ -737,35 +1037,98 @@ def main() -> None:
                 pred_action=sample_prediction.action,
             )
 
-        improved = metrics["val_loss"] < best_val
-        if improved:
+        improved_val_loss = metrics["val_loss"] < best_val
+        improved_action_mse = metrics["val_sample_action_mse"] < best_action_mse
+        improved_ema_action_mse = (
+            ema_val_metrics is not None
+            and metrics["ema_val_sample_action_mse"] < best_ema_action_mse
+        )
+        if improved_val_loss:
             best_val = metrics["val_loss"]
             best_metrics = copy.deepcopy(metrics)
             best_model_state = copy.deepcopy(model.state_dict())
+        if improved_action_mse:
+            best_action_mse = metrics["val_sample_action_mse"]
+            best_action_mse_metrics = copy.deepcopy(metrics)
+            best_action_mse_model_state = copy.deepcopy(model.state_dict())
+        if improved_ema_action_mse:
+            best_ema_action_mse = metrics["ema_val_sample_action_mse"]
+            best_ema_action_mse_metrics = copy.deepcopy(metrics)
 
-        latest_payload = checkpoint_payload(model.state_dict(), epoch)
+        latest_payload = checkpoint_payload(
+            model.state_dict(),
+            epoch,
+            selection_criterion="latest",
+        )
         _atomic_torch_save(latest_payload, output_dir / "latest.ckpt")
 
-        if improved:
+        if improved_val_loss:
             checkpoint_path = output_dir / "best.ckpt"
-            _atomic_torch_save(checkpoint_payload(best_model_state, epoch), checkpoint_path)
-            export_cfg = cfg.get("deployment", {}).get("eval_bundle", {})
-            if bool(export_cfg.get("enabled", False)):
-                bundle_dir = output_dir / "eval_bundles" / f"eval_bundle_{run_name}_step{global_step}"
-                camera_resolutions = {
-                    str(name): tuple(int(value) for value in resolution)
-                    for name, resolution in export_cfg.get("camera_resolutions", {}).items()
-                }
-                exported = export_eval_bundle(
-                    checkpoint_path,
-                    bundle_dir,
-                    execute_horizon=int(export_cfg.get("execute_horizon", train_dataset.action_horizon)),
-                    camera_resolutions=camera_resolutions,
-                    joint_order=list(export_cfg.get("joint_order", DEFAULT_JOINT_ORDER)),
-                    data_version=str(export_cfg.get("data_version", "unknown")),
-                    archive=bool(export_cfg.get("archive", True)),
-                )
-                print(f"[eval_bundle] {exported}")
+            val_loss_payload = checkpoint_payload(
+                best_model_state,
+                epoch,
+                selection_criterion="val_loss",
+            )
+            _atomic_torch_save(val_loss_payload, checkpoint_path)
+            _atomic_torch_save(
+                val_loss_payload,
+                output_dir / "best_val_loss.ckpt",
+            )
+        if improved_action_mse:
+            action_mse_checkpoint_path = output_dir / "best_action_mse.ckpt"
+            _atomic_torch_save(
+                checkpoint_payload(
+                    best_action_mse_model_state,
+                    epoch,
+                    selection_criterion="val_sample_action_mse",
+                ),
+                action_mse_checkpoint_path,
+            )
+        if improved_ema_action_mse:
+            _atomic_torch_save(
+                checkpoint_payload(
+                    model.state_dict(),
+                    epoch,
+                    selection_criterion="ema_val_sample_action_mse",
+                ),
+                output_dir / "best_ema_action_mse.ckpt",
+            )
+
+        export_cfg = cfg.get("deployment", {}).get("eval_bundle", {})
+        export_variant = str(export_cfg.get("weights_variant", "raw")).strip().lower()
+        if export_variant not in {"raw", "ema"}:
+            raise ValueError("deployment.eval_bundle.weights_variant must be 'raw' or 'ema'")
+        should_export = (
+            improved_action_mse if export_variant == "raw" else improved_ema_action_mse
+        )
+        if bool(export_cfg.get("enabled", False)) and should_export:
+            selected_checkpoint = output_dir / (
+                "best_action_mse.ckpt"
+                if export_variant == "raw"
+                else "best_ema_action_mse.ckpt"
+            )
+            bundle_dir = (
+                output_dir
+                / "eval_bundles"
+                / f"eval_bundle_{run_name}_step{global_step}"
+            )
+            camera_resolutions = {
+                str(name): tuple(int(value) for value in resolution)
+                for name, resolution in export_cfg.get("camera_resolutions", {}).items()
+            }
+            exported = export_eval_bundle(
+                selected_checkpoint,
+                bundle_dir,
+                execute_horizon=int(
+                    export_cfg.get("execute_horizon", train_dataset.action_horizon)
+                ),
+                camera_resolutions=camera_resolutions,
+                joint_order=list(export_cfg.get("joint_order", DEFAULT_JOINT_ORDER)),
+                data_version=str(export_cfg.get("data_version", "unknown")),
+                archive=bool(export_cfg.get("archive", True)),
+                weights_variant=export_variant,
+            )
+            print(f"[eval_bundle] {exported}")
 
         epochs_completed_this_run += 1
         if max_epochs_this_run is not None and epochs_completed_this_run >= int(max_epochs_this_run):
@@ -774,6 +1137,8 @@ def main() -> None:
 
     if best_model_state is None:
         raise RuntimeError("Training finished without producing a checkpoint")
+    if best_action_mse_model_state is None:
+        raise RuntimeError("Training finished without producing an action-MSE checkpoint")
     if last_metrics is None:
         raise RuntimeError("Training finished without producing any metrics")
 
@@ -817,11 +1182,36 @@ def main() -> None:
         "n_layer": int(model_cfg.get("n_layer", 4)),
         "num_inference_steps": int(model_cfg.get("num_inference_steps", 40)),
         "time_eps": float(model_cfg.get("time_eps", 1.0e-3)),
+        "ema_enabled": bool(training_cfg["ema_enabled"]),
+        "ema_decay": float(training_cfg["ema_decay"]),
+        "validation": copy.deepcopy(validation_cfg),
         "rerun": rerun_info,
         "wandb": wandb_info,
         "best_epoch": int(best_metrics["epoch"]) if best_metrics is not None else None,
         "best_val_loss": float(best_metrics["val_loss"]) if best_metrics is not None else None,
+        "best_action_mse_epoch": (
+            int(best_action_mse_metrics["epoch"])
+            if best_action_mse_metrics is not None
+            else None
+        ),
+        "best_val_sample_action_mse": (
+            float(best_action_mse_metrics["val_sample_action_mse"])
+            if best_action_mse_metrics is not None
+            else None
+        ),
+        "best_ema_action_mse_epoch": (
+            int(best_ema_action_mse_metrics["epoch"])
+            if best_ema_action_mse_metrics is not None
+            else None
+        ),
+        "best_ema_val_sample_action_mse": (
+            float(best_ema_action_mse_metrics["ema_val_sample_action_mse"])
+            if best_ema_action_mse_metrics is not None
+            else None
+        ),
         "best": best_metrics,
+        "best_action_mse": best_action_mse_metrics,
+        "best_ema_action_mse": best_ema_action_mse_metrics,
         "final": final_metrics,
     }
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -829,6 +1219,8 @@ def main() -> None:
     wandb_logger.update_summary(summary)
     wandb_logger.save_text("summary.json", summary_path.read_text(encoding="utf-8"))
     wandb_logger.save_text("config_resolved.yaml", (output_dir / "config_resolved.yaml").read_text(encoding="utf-8"))
+    watchdog.stop()
+    sys.excepthook = original_excepthook
     wandb_logger.finish()
 
 
