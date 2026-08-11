@@ -1,6 +1,6 @@
 # Flow Matching Test
 
-这是一个基于处理后 A2D HDF5 的 `RGB condition -> flow matching -> joint chunk` 训练骨架。
+本仓库是面向 A2D 机器人操作数据的 RGB + proprio 条件动作块训练与评测框架，以 Flow Matching 为当前已验证主线，并保留尚待完整验证的 RS-IMLE 与 Diffusion Policy 实验实现。
 
 当前仓库只保留一条主线：
 
