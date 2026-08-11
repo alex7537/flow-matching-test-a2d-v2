@@ -7,12 +7,20 @@ import pytest
 import torch
 import yaml
 
-from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, export_eval_bundle
+from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, _git_sha, export_eval_bundle
 from flow_matching_test.policies.factory import build_policy, resolve_policy_type
 from rollout.policy_wrapper import Policy
 from rollout.report import build_report
 from rollout.run_rollout import _bundle_provenance, load_trials
 from rollout.success_checker import ThreePhaseChecker
+
+
+def test_git_sha_is_optional_when_git_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing_git(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr("flow_matching_test.export_bundle.subprocess.run", missing_git)
+    assert _git_sha(Path(".")) is None
 
 
 def _checkpoint(
