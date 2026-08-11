@@ -25,7 +25,7 @@ from torch.utils.data import DataLoader
 
 from flow_matching_test.a2d_dataset import A2DConfig, A2DProcessedWindowDataset
 from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, _git_sha, export_eval_bundle
-from flow_matching_test.policies.base import ActionPolicy
+from flow_matching_test.policies.base import ActionPolicy, masked_action_mse_per_sample
 from flow_matching_test.policies.factory import (
     build_policy,
     materialize_policy_config,
@@ -182,6 +182,9 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
         history_steps=int(data_cfg.get("history_steps", 1)),
         action_horizon=int(data_cfg.get("action_horizon", 16)),
         action_offset_steps=int(data_cfg.get("action_offset_steps", 1)),
+        include_tail_padded_windows=bool(
+            data_cfg.get("include_tail_padded_windows", False)
+        ),
         val_ratio=float(data_cfg.get("val_ratio", 0.1)),
         seed=seed,
         aug_brightness=float(data_cfg.get("aug_brightness", 0.2)),
@@ -190,6 +193,7 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
         aug_hue=float(data_cfg.get("aug_hue", 0.05)),
         aug_random_crop_pad=int(data_cfg.get("aug_random_crop_pad", 8)),
         transition_oversample_factor=int(data_cfg.get("transition_oversample_factor", 1)),
+        lift_oversample_factor=int(data_cfg.get("lift_oversample_factor", 1)),
         transition_threshold=float(data_cfg.get("transition_threshold", 0.1)),
         motion_threshold=float(data_cfg.get("motion_threshold", 1.0e-4)),
         allow_duplicate_episodes=bool(data_cfg.get("allow_duplicate_episodes", False)),
@@ -399,6 +403,7 @@ def evaluate(
     losses: list[float] = []
     component_values: dict[str, list[float]] = defaultdict(list)
     sample_mse: list[float] = []
+    lift_sample_mse: list[float] = []
     for step_idx, batch in enumerate(loader):
         if max_steps is not None and step_idx >= max_steps:
             break
@@ -440,15 +445,34 @@ def evaluate(
                 sampled = model.sample_actions_seeded(batch["obs"], sample_seeds).action_normalized
             else:
                 sampled = _sample_normalized_actions(model, batch)
-            draw_mse.append(float(torch.mean((sampled - batch["action"]) ** 2).item()))
-        sample_mse.append(float(np.mean(draw_mse)))
+            action_mask = batch.get("action_mask")
+            if action_mask is not None and not isinstance(action_mask, torch.Tensor):
+                raise TypeError("batch['action_mask'] must be a tensor")
+            draw_mse.append(
+                masked_action_mse_per_sample(
+                    sampled,
+                    batch["action"],
+                    action_mask,
+                )
+            )
+        per_sample_mse = torch.stack(draw_mse).mean(dim=0)
+        sample_mse.extend(float(value) for value in per_sample_mse.detach().cpu().tolist())
+        is_lift = batch.get("is_lift")
+        if isinstance(is_lift, torch.Tensor) and is_lift.any():
+            lift_sample_mse.extend(
+                float(value)
+                for value in per_sample_mse[is_lift.bool()].detach().cpu().tolist()
+            )
     if not losses:
         return {"loss": 0.0, "sample_action_mse": 0.0}
-    return {
+    result = {
         "loss": float(np.mean(losses)),
         **{name: float(np.mean(values)) for name, values in component_values.items()},
         "sample_action_mse": float(np.mean(sample_mse)),
     }
+    if lift_sample_mse:
+        result["lift_sample_action_mse"] = float(np.mean(lift_sample_mse))
+    return result
 
 
 def main() -> None:
@@ -463,11 +487,22 @@ def main() -> None:
     # Materialize the temporal contract so checkpoints and exported bundles never
     # have to guess whether chunk[0] means action[t] or action[t+1].
     data_cfg["action_offset_steps"] = int(data_cfg.get("action_offset_steps", 1))
+    data_cfg["include_tail_padded_windows"] = bool(
+        data_cfg.get("include_tail_padded_windows", False)
+    )
+    data_cfg["lift_oversample_factor"] = int(data_cfg.get("lift_oversample_factor", 1))
+    if data_cfg["lift_oversample_factor"] < 1:
+        raise ValueError("data.lift_oversample_factor must be >= 1")
     data_cfg["max_open_hdf5_files"] = int(data_cfg.get("max_open_hdf5_files", 64))
     training_cfg["watchdog_timeout_sec"] = float(training_cfg.get("watchdog_timeout_sec", 300.0))
     training_cfg["watchdog_check_interval_sec"] = float(
         training_cfg.get("watchdog_check_interval_sec", 10.0)
     )
+    training_cfg["periodic_checkpoint_every_n_epochs"] = int(
+        training_cfg.get("periodic_checkpoint_every_n_epochs", 0)
+    )
+    if training_cfg["periodic_checkpoint_every_n_epochs"] < 0:
+        raise ValueError("training.periodic_checkpoint_every_n_epochs must be >= 0")
     model_cfg = cfg["model"]
     policy_cfg = materialize_policy_config(
         copy.deepcopy(cfg.get("policy", {"type": "flow_matching"}))
@@ -603,6 +638,8 @@ def main() -> None:
         "segmentation_motion_threshold": float(data_cfg.get("motion_threshold", 1.0e-4)),
         "segmentation_keyframe_threshold": float(data_cfg.get("transition_threshold", 0.1)),
         "action_offset_steps": train_dataset.cfg.action_offset_steps,
+        "include_tail_padded_windows": train_dataset.cfg.include_tail_padded_windows,
+        "lift_oversample_factor": train_dataset.cfg.lift_oversample_factor,
         "dataset_manifest_sha256": split_manifest.get("dataset_manifest_sha256"),
         "split_manifest_sha256": split_manifest.get("split_manifest_sha256"),
     }
@@ -728,6 +765,7 @@ def main() -> None:
                 "action_dim": train_dataset.action_dim,
                 "action_horizon": train_dataset.action_horizon,
                 "action_offset_steps": train_dataset.cfg.action_offset_steps,
+                "uses_action_mask": train_dataset.cfg.include_tail_padded_windows,
                 "action_layout": [
                     {"name": "arm2_pos", "dim": 7},
                     {"name": "hand2_pos", "dim": 6},
@@ -806,6 +844,29 @@ def main() -> None:
         if checkpoint_action_offset != data_provenance["action_offset_steps"]:
             raise ValueError(
                 "resume checkpoint action_offset_steps does not match the current dataset"
+            )
+        checkpoint_data_cfg = checkpoint.get("config", {}).get("data", {})
+        checkpoint_tail_windows = bool(
+            checkpoint_provenance.get(
+                "include_tail_padded_windows",
+                checkpoint_data_cfg.get("include_tail_padded_windows", False),
+            )
+        )
+        if checkpoint_tail_windows != data_provenance["include_tail_padded_windows"]:
+            raise ValueError(
+                "resume checkpoint include_tail_padded_windows does not match "
+                "the current dataset"
+            )
+        checkpoint_lift_factor = int(
+            checkpoint_provenance.get(
+                "lift_oversample_factor",
+                checkpoint_data_cfg.get("lift_oversample_factor", 1),
+            )
+        )
+        if checkpoint_lift_factor != data_provenance["lift_oversample_factor"]:
+            raise ValueError(
+                "resume checkpoint lift_oversample_factor does not match "
+                "the current dataset"
             )
         for key in ("stats_digest", "dataset_manifest_sha256", "split_manifest_sha256"):
             if checkpoint_provenance.get(key) != data_provenance.get(key):
@@ -951,7 +1012,15 @@ def main() -> None:
         train_sample_batch = next(iter(train_sample_loader))
         train_sample_batch = _to_device(train_sample_batch, device)
         train_sample = _sample_normalized_actions(model, train_sample_batch)
-        train_sample_mse = float(torch.mean((train_sample - train_sample_batch["action"]) ** 2).item())
+        train_sample_mse = float(
+            masked_action_mse_per_sample(
+                train_sample,
+                train_sample_batch["action"],
+                train_sample_batch.get("action_mask"),
+            )
+            .mean()
+            .item()
+        )
         encoder_update_ratio = _parameter_update_ratio(backbone_params, encoder_reference)
         encoder_feature_std = _encoder_feature_std(model, train_sample_batch["obs"])
 
@@ -1061,6 +1130,12 @@ def main() -> None:
             selection_criterion="latest",
         )
         _atomic_torch_save(latest_payload, output_dir / "latest.ckpt")
+        periodic_every = training_cfg["periodic_checkpoint_every_n_epochs"]
+        if periodic_every > 0 and (epoch + 1) % periodic_every == 0:
+            _atomic_torch_save(
+                latest_payload,
+                output_dir / f"epoch_{epoch + 1:03d}_step{global_step}.ckpt",
+            )
 
         if improved_val_loss:
             checkpoint_path = output_dir / "best.ckpt"
@@ -1153,14 +1228,20 @@ def main() -> None:
         "train_samples": len(train_dataset),
         "val_samples": len(val_dataset),
         "train_base_samples": train_dataset.base_sample_count,
+        "train_complete_samples": train_dataset.complete_sample_count,
+        "train_tail_padded_samples": train_dataset.tail_padded_sample_count,
         "train_transition_samples": train_dataset.transition_sample_count,
         "train_effective_transition_samples": train_dataset.effective_transition_sample_count,
+        "train_lift_samples": train_dataset.lift_sample_count,
+        "train_effective_lift_samples": train_dataset.effective_lift_sample_count,
         "data_dir": str(data_cfg["data_dir"]),
         "image_keys": list(data_cfg.get("image_keys", ["rgb_head", "rgb_left_hand", "rgb_right_hand"])),
         "action_dim": train_dataset.action_dim,
         "history_steps": train_dataset.history_steps,
         "action_horizon": train_dataset.action_horizon,
         "action_offset_steps": train_dataset.cfg.action_offset_steps,
+        "include_tail_padded_windows": train_dataset.cfg.include_tail_padded_windows,
+        "lift_oversample_factor": train_dataset.cfg.lift_oversample_factor,
         "policy_type": policy_type,
         "encoder_type": str(model_cfg.get("encoder_type", "cnn")),
         "timm_model_name": str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),
@@ -1175,6 +1256,9 @@ def main() -> None:
         "backbone_lr_multiplier": backbone_lr_multiplier,
         "weight_decay": float(training_cfg.get("weight_decay", 1.0e-4)),
         "num_epochs": int(training_cfg.get("num_epochs", 50)),
+        "periodic_checkpoint_every_n_epochs": int(
+            training_cfg["periodic_checkpoint_every_n_epochs"]
+        ),
         "max_train_steps": max_train_steps,
         "max_val_steps": max_val_steps,
         "d_model": int(model_cfg.get("d_model", 128)),

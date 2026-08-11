@@ -4,7 +4,7 @@ import math
 
 import torch
 
-from flow_matching_test.policies.base import SamplingResult
+from flow_matching_test.policies.base import SamplingResult, masked_action_mse_per_sample
 from flow_matching_test.policies.flow_matching import FlowMatchingPolicy
 
 
@@ -64,15 +64,30 @@ class DiffusionPolicy(FlowMatchingPolicy):
             obs=obs,
             timesteps=self._normalized_time(timesteps),
         )
-        per_sample_loss = torch.mean((pred_noise - noise) ** 2, dim=(1, 2))
+        action_mask = batch.get("action_mask")
+        if action_mask is not None and not isinstance(action_mask, torch.Tensor):
+            raise TypeError("batch['action_mask'] must be a tensor")
+        per_sample_loss = masked_action_mse_per_sample(pred_noise, noise, action_mask)
         loss = per_sample_loss.mean()
-        segment_losses = {"static_loss": None, "continuous_loss": None, "keyframe_loss": None}
+        segment_losses = {
+            "static_loss": None,
+            "continuous_loss": None,
+            "keyframe_loss": None,
+            "lift_loss": None,
+        }
         segment_type = batch.get("segment_type")
         if isinstance(segment_type, torch.Tensor):
-            for segment_id, name in enumerate(segment_losses):
+            for segment_id, name in enumerate(("static_loss", "continuous_loss", "keyframe_loss")):
                 mask = segment_type == segment_id
                 if mask.any():
                     segment_losses[name] = float(per_sample_loss[mask].mean().detach().item())
+        is_lift = batch.get("is_lift")
+        if isinstance(is_lift, torch.Tensor):
+            lift_mask = is_lift.bool()
+            if lift_mask.any():
+                segment_losses["lift_loss"] = float(
+                    per_sample_loss[lift_mask].mean().detach().item()
+                )
         return loss, {
             "epsilon_loss": float(loss.detach().item()),
             "diffusion_t_mean": float(timesteps.float().mean().detach().item()),

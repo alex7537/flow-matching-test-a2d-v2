@@ -71,7 +71,9 @@ class A2DConfig:
     history_steps: int = 1
     action_horizon: int = 16
     action_offset_steps: int = 1
+    include_tail_padded_windows: bool = False
     transition_oversample_factor: int = 1
+    lift_oversample_factor: int = 1
     transition_threshold: float = DEFAULT_KEYFRAME_THRESHOLD
     motion_threshold: float = DEFAULT_MOTION_THRESHOLD
     allow_duplicate_episodes: bool = False
@@ -583,18 +585,23 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
         super().__init__(cfg, selected, stats, train=split == "train")
         self.split_manifest = split_manifest
 
-        # The current model has no padding-mask input, so expose only complete chunks.
-        self.samples = [
+        complete_samples = [
             (ep_idx, t)
             for ep_idx, t in self.samples
             if t + cfg.action_offset_steps + cfg.action_horizon
             <= self.episodes[ep_idx]["length"]
         ]
+        self.complete_sample_count = len(complete_samples)
+        if not cfg.include_tail_padded_windows:
+            self.samples = complete_samples
+        self.tail_padded_sample_count = len(self.samples) - self.complete_sample_count
         if not self.samples:
-            raise ValueError(f"split {split} has no complete action windows")
+            raise ValueError(f"split {split} has no action windows")
         self.base_sample_count = len(self.samples)
         arm_keyframe_samples: list[tuple[int, int]] = []
+        lift_samples: list[tuple[int, int]] = []
         self.segment_by_sample: dict[tuple[int, int], int] = {}
+        self.lift_by_sample: dict[tuple[int, int], bool] = {}
         samples_by_episode: dict[int, list[tuple[int, int]]] = {}
         for sample in self.samples:
             samples_by_episode.setdefault(sample[0], []).append(sample)
@@ -602,27 +609,48 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
             with h5py.File(episode["path"], "r") as file:
                 segment_type = np.asarray(file["segment_type"][:], dtype=np.uint8)
                 arm_keyframe = np.asarray(file["arm_keyframe"][:], dtype=bool)
+                phase = [
+                    value.decode() if isinstance(value, bytes) else str(value)
+                    for value in file["phase"][:]
+                ]
             for sample in samples_by_episode.get(ep_idx, []):
                 _, start = sample
                 start += cfg.action_offset_steps
-                stop = start + cfg.action_horizon
+                stop = min(start + cfg.action_horizon, episode["length"])
                 has_arm_keyframe = bool(np.any(arm_keyframe[start:stop]))
+                has_lift = any("lift" in value.lower() for value in phase[start:stop])
                 self.segment_by_sample[sample] = int(np.max(segment_type[start:stop]))
+                self.lift_by_sample[sample] = has_lift
                 if has_arm_keyframe:
                     arm_keyframe_samples.append(sample)
+                if has_lift:
+                    lift_samples.append(sample)
         self.transition_sample_count = len(arm_keyframe_samples)
         self.transition_sample_set = set(arm_keyframe_samples)
-        factor = int(cfg.transition_oversample_factor)
-        if factor < 1:
+        transition_factor = int(cfg.transition_oversample_factor)
+        if transition_factor < 1:
             raise ValueError("transition_oversample_factor must be >= 1")
-        if split == "train" and factor > 1:
-            self.samples.extend(arm_keyframe_samples * (factor - 1))
+        lift_factor = int(cfg.lift_oversample_factor)
+        if lift_factor < 1:
+            raise ValueError("lift_oversample_factor must be >= 1")
+        if split == "train" and transition_factor > 1:
+            self.samples.extend(arm_keyframe_samples * (transition_factor - 1))
+        if split == "train" and lift_factor > 1:
+            self.samples.extend(lift_samples * (lift_factor - 1))
         self.effective_transition_sample_count = self.transition_sample_count * (
-            factor if split == "train" else 1
+            transition_factor if split == "train" else 1
+        )
+        self.lift_sample_count = len(lift_samples)
+        self.effective_lift_sample_count = self.lift_sample_count * (
+            lift_factor if split == "train" else 1
         )
         print(
             f"[sampling:{split}] transition windows {self.transition_sample_count}/"
-            f"{self.base_sample_count}; factor={factor if split == 'train' else 1}; "
+            f"{self.base_sample_count}; factor="
+            f"{transition_factor if split == 'train' else 1}; "
+            f"lift windows {self.lift_sample_count}/{self.base_sample_count}; factor="
+            f"{lift_factor if split == 'train' else 1}; "
+            f"tail padded={self.tail_padded_sample_count}; "
             f"effective samples={len(self.samples)}"
         )
 
@@ -654,7 +682,9 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
         return {
             "obs": obs,
             "action": sample["action"],
+            "action_mask": sample["action_mask"],
             "segment_type": torch.tensor(self.segment_by_sample[sample_key], dtype=torch.long),
+            "is_lift": torch.tensor(self.lift_by_sample[sample_key], dtype=torch.bool),
             "sample_index": torch.tensor(idx, dtype=torch.long),
         }
 

@@ -67,6 +67,48 @@ class DataContractTest(unittest.TestCase):
             self.assertEqual(cfg.action_offset_steps, 1)
             dataset.close()
 
+    def test_tail_action_chunk_repeats_last_action_and_masks_padding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "episode.hdf5"
+            length = 5
+            qpos = np.repeat(np.arange(length, dtype=np.float32)[:, None], 13, axis=1)
+            with h5py.File(path, "w") as file:
+                observations = file.create_group("observations")
+                observations.create_dataset("qpos", data=qpos)
+                observations.create_dataset(
+                    "rgb_head",
+                    data=np.zeros((length, 4, 4, 3), dtype=np.uint8),
+                )
+                file.create_dataset("action", data=qpos)
+
+            stats = {
+                "state": {"min": [0.0] * 13, "span": [4.0] * 13},
+                "action": {"min": [0.0] * 13, "span": [4.0] * 13},
+            }
+            dataset = A2DFlowDataset(
+                cfg=A2DConfig(
+                    image_keys=("rgb_head",),
+                    image_size=4,
+                    history_steps=1,
+                    action_horizon=4,
+                    action_offset_steps=1,
+                    aug_random_crop_pad=0,
+                ),
+                episodes=[{"path": str(path), "length": length}],
+                norm_stats=stats,
+                train=False,
+            )
+
+            sample = dataset[len(dataset) - 1]
+            expected = np.repeat(
+                normalize(qpos[-1:], stats["action"]),
+                4,
+                axis=0,
+            )
+            np.testing.assert_allclose(sample["action"].numpy(), expected)
+            np.testing.assert_array_equal(sample["action_mask"].numpy(), [1, 0, 0, 0])
+            dataset.close()
+
     def test_hdf5_handle_cache_is_lru_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = []

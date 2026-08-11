@@ -131,11 +131,26 @@ class ImlePolicy(ActionPolicy):
         self,
         real_actions: torch.Tensor,
         candidates: torch.Tensor,
+        action_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         batch_size, num_samples = candidates.shape[:2]
-        real_flat = real_actions.reshape(batch_size, 1, -1)
-        candidate_flat = candidates.reshape(batch_size, num_samples, -1)
-        distances = torch.cdist(real_flat, candidate_flat).squeeze(1)
+        if action_mask is None:
+            real_flat = real_actions.reshape(batch_size, 1, -1)
+            candidate_flat = candidates.reshape(batch_size, num_samples, -1)
+            distances = torch.cdist(real_flat, candidate_flat).squeeze(1)
+        else:
+            if action_mask.shape != real_actions.shape[:2]:
+                raise ValueError("action_mask must have shape [B,H]")
+            mask = action_mask.to(device=real_actions.device, dtype=real_actions.dtype)
+            valid_steps = mask.sum(dim=1)
+            if torch.any(valid_steps <= 0):
+                raise ValueError("every sample must contain at least one real action timestep")
+            squared = (
+                (candidates - real_actions.unsqueeze(1)).square()
+                * mask[:, None, :, None]
+            ).sum(dim=(2, 3))
+            scale = self.action_horizon / valid_steps
+            distances = torch.sqrt(squared * scale[:, None])
         valid = distances > self.rs_imle_epsilon
         max_distance = distances.max().detach()
         masked = distances + (~valid).to(distances.dtype) * max_distance
@@ -197,18 +212,37 @@ class ImlePolicy(ActionPolicy):
             self.action_horizon,
             self.action_dim,
         )
-        nearest, valid_real = self._nearest_distances(clean_action, candidates)
+        action_mask = batch.get("action_mask")
+        if action_mask is not None and not isinstance(action_mask, torch.Tensor):
+            raise TypeError("batch['action_mask'] must be a tensor")
+        nearest, valid_real = self._nearest_distances(
+            clean_action,
+            candidates,
+            action_mask,
+        )
         denominator = valid_real.sum()
         loss = (nearest * valid_real).sum() / denominator.clamp_min(1)
         loss = torch.where(denominator > 0, loss, loss.new_zeros(()))
 
-        segment_losses = {"static_loss": None, "continuous_loss": None, "keyframe_loss": None}
+        segment_losses = {
+            "static_loss": None,
+            "continuous_loss": None,
+            "keyframe_loss": None,
+            "lift_loss": None,
+        }
         segment_type = batch.get("segment_type")
         if isinstance(segment_type, torch.Tensor):
-            for segment_id, name in enumerate(segment_losses):
+            for segment_id, name in enumerate(("static_loss", "continuous_loss", "keyframe_loss")):
                 mask = (segment_type == segment_id) & valid_real
                 if mask.any():
                     segment_losses[name] = float(nearest[mask].mean().detach().item())
+        is_lift = batch.get("is_lift")
+        if isinstance(is_lift, torch.Tensor):
+            lift_mask = is_lift.bool() & valid_real
+            if lift_mask.any():
+                segment_losses["lift_loss"] = float(
+                    nearest[lift_mask].mean().detach().item()
+                )
         return loss, {
             "imle_loss": float(loss.detach().item()),
             "valid_match_fraction": float(valid_real.float().mean().detach().item()),

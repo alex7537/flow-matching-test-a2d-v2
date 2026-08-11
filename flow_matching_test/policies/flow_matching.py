@@ -6,7 +6,11 @@ import torch
 import torch.nn as nn
 
 from flow_matching_test.observation import build_rgb_obs_composer
-from flow_matching_test.policies.base import ActionPolicy, SamplingResult
+from flow_matching_test.policies.base import (
+    ActionPolicy,
+    SamplingResult,
+    masked_action_mse_per_sample,
+)
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -205,15 +209,34 @@ class FlowMatchingPolicy(ActionPolicy):
         noisy_action = (1.0 - t_expand) * noise + t_expand * clean_action
         target_velocity = clean_action - noise
         pred_velocity = self(noisy_action=noisy_action, obs=obs, timesteps=timesteps)
-        per_sample_loss = torch.mean((pred_velocity - target_velocity) ** 2, dim=(1, 2))
+        action_mask = batch.get("action_mask")
+        if action_mask is not None and not isinstance(action_mask, torch.Tensor):
+            raise TypeError("batch['action_mask'] must be a tensor")
+        per_sample_loss = masked_action_mse_per_sample(
+            pred_velocity,
+            target_velocity,
+            action_mask,
+        )
         loss = per_sample_loss.mean()
-        segment_losses = {"static_loss": None, "continuous_loss": None, "keyframe_loss": None}
+        segment_losses = {
+            "static_loss": None,
+            "continuous_loss": None,
+            "keyframe_loss": None,
+            "lift_loss": None,
+        }
         segment_type = batch.get("segment_type")
         if isinstance(segment_type, torch.Tensor):
             for segment_id, name in enumerate(("static_loss", "continuous_loss", "keyframe_loss")):
                 mask = segment_type == segment_id
                 if mask.any():
                     segment_losses[name] = float(per_sample_loss[mask].mean().detach().item())
+        is_lift = batch.get("is_lift")
+        if isinstance(is_lift, torch.Tensor):
+            lift_mask = is_lift.bool()
+            if lift_mask.any():
+                segment_losses["lift_loss"] = float(
+                    per_sample_loss[lift_mask].mean().detach().item()
+                )
         return loss, {
             "flow_loss": float(loss.detach().item()),
             "t_mean": float(timesteps.mean().detach().item()),

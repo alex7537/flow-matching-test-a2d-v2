@@ -8,6 +8,26 @@ import torch
 import torch.nn as nn
 
 
+def masked_action_mse_per_sample(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    action_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Return one MSE per sample, excluding padded action timesteps."""
+    if prediction.shape != target.shape or prediction.ndim != 3:
+        raise ValueError("prediction and target must have matching [B,H,A] shapes")
+    squared_error = (prediction - target).square()
+    if action_mask is None:
+        return squared_error.mean(dim=(1, 2))
+    if action_mask.shape != target.shape[:2]:
+        raise ValueError("action_mask must have shape [B,H]")
+    mask = action_mask.to(device=target.device, dtype=target.dtype)
+    denominator = mask.sum(dim=1) * target.shape[2]
+    if torch.any(denominator <= 0):
+        raise ValueError("every sample must contain at least one real action timestep")
+    return (squared_error * mask.unsqueeze(-1)).sum(dim=(1, 2)) / denominator
+
+
 @dataclass(frozen=True)
 class SamplingResult:
     action_normalized: torch.Tensor
