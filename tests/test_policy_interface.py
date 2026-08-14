@@ -12,12 +12,16 @@ from flow_matching_test.policies.imle import ImlePolicy
 from flow_matching_test.train import evaluate
 
 
-def _policy(policy_cfg: dict[str, object] | None = None):
+def _policy(
+    policy_cfg: dict[str, object] | None = None,
+    *,
+    use_proprio: bool = True,
+):
     return build_policy(
         policy_cfg=policy_cfg or {"type": "flow_matching"},
         model_cfg={
             "encoder_type": "cnn",
-            "use_proprio": True,
+            "use_proprio": use_proprio,
             "d_model": 16,
             "n_head": 4,
             "n_layer": 1,
@@ -79,6 +83,23 @@ def test_policy_loss_backprop_sampling_and_parameter_groups() -> None:
 
     sampled = policy.sample_actions(batch["obs"])
     assert sampled.action_normalized.shape == (2, 4, 13)
+    assert sampled.action.shape == (2, 4, 13)
+
+
+def test_rgb_only_policy_does_not_require_or_use_proprio() -> None:
+    policy = _policy(use_proprio=False)
+    batch = _batch()
+    obs_without_proprio = {
+        key: value for key, value in batch["obs"].items() if key != "proprio"
+    }
+    batch["obs"] = obs_without_proprio
+
+    loss, _ = policy.compute_loss(batch)
+    loss.backward()
+    sampled = policy.sample_actions(obs_without_proprio)
+
+    assert policy.use_proprio is False
+    assert policy.proprio_proj is None
     assert sampled.action.shape == (2, 4, 13)
 
 

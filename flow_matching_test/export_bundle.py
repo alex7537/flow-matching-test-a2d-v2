@@ -59,6 +59,7 @@ def _inference_config(
     train_cfg = checkpoint["config"]
     data_cfg = train_cfg["data"]
     model_cfg = train_cfg["model"]
+    use_proprio = bool(model_cfg.get("use_proprio", True))
     image_keys = list(data_cfg["image_keys"])
     bundle_cfg = train_cfg.get("deployment", {}).get("eval_bundle", {})
     policy_cfg = copy.deepcopy(train_cfg.get("policy", {}))
@@ -99,7 +100,7 @@ def _inference_config(
             "timm_pretrained": False,
             "timm_token_mode": str(model_cfg.get("timm_token_mode", "spatial")),
             "timm_tokens_per_frame": int(model_cfg.get("timm_tokens_per_frame", 1)),
-            "use_proprio": bool(model_cfg.get("use_proprio", True)),
+            "use_proprio": use_proprio,
             "d_model": int(model_cfg.get("d_model", 128)),
             "n_head": int(model_cfg.get("n_head", 4)),
             "n_layer": int(model_cfg.get("n_layer", 4)),
@@ -126,7 +127,7 @@ def _inference_config(
             "cameras": cameras,
             "image_size": image_size,
             "history_steps": int(data_cfg.get("history_steps", 1)),
-            "proprio_dim": 13,
+            "proprio_dim": 13 if use_proprio else 0,
             "freq_hz": 30,
             "freq_hz_status": "deployment_assumption_unverified_no_dataset_timestamps",
         },

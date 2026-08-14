@@ -28,6 +28,7 @@ def _checkpoint(
     policy_cfg: dict | None = None,
     *,
     include_ema: bool = False,
+    use_proprio: bool = True,
 ) -> None:
     policy_cfg = policy_cfg or {"type": "flow_matching"}
     config = {
@@ -39,7 +40,7 @@ def _checkpoint(
         },
         "model": {
             "encoder_type": "cnn",
-            "use_proprio": True,
+            "use_proprio": use_proprio,
             "d_model": 16,
             "n_head": 4,
             "n_layer": 1,
@@ -155,6 +156,28 @@ def test_bundle_can_override_cfm_inference_steps(tmp_path: Path) -> None:
     assert exported_config["model"]["cfm"]["num_inference_steps"] == 7
     policy = Policy(bundle, device="cpu")
     assert policy.model.num_inference_steps == 7
+
+
+def test_rgb_only_bundle_rollout_does_not_require_proprio(tmp_path: Path) -> None:
+    ckpt = tmp_path / "best.ckpt"
+    bundle = tmp_path / "bundle"
+    _checkpoint(ckpt, use_proprio=False)
+
+    export_eval_bundle(ckpt, bundle, execute_horizon=2)
+
+    exported_config = yaml.safe_load((bundle / "config.yaml").read_text())
+    assert exported_config["model"]["use_proprio"] is False
+    assert exported_config["obs"]["proprio_dim"] == 0
+    policy = Policy(bundle, device="cpu")
+    action = policy.infer(
+        {
+            "images": {
+                "rgb_head": np.zeros((24, 40, 3), dtype=np.uint8),
+                "rgb_right_hand": np.zeros((24, 40, 3), dtype=np.uint8),
+            }
+        }
+    )
+    assert action.shape == (4, 13)
 
 
 def test_bundle_can_export_ema_weights_with_explicit_provenance(tmp_path: Path) -> None:
