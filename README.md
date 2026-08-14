@@ -1,6 +1,6 @@
 # Flow Matching Test
 
-这是一个基于处理后 A2D HDF5 的 `RGB condition -> flow matching -> joint chunk` 训练骨架。
+本仓库是面向 A2D 机器人操作数据的 RGB + proprio 条件动作块训练与评测框架，以 Flow Matching 为当前已验证主线，并保留尚待完整验证的 RS-IMLE 与 Diffusion Policy 实验实现。
 
 当前仓库只保留一条主线：
 
@@ -241,6 +241,19 @@ python3 -m flow_matching_test.export_rerun_eval \
 - 导出 RGB + GT/Pred action 的 `.rrd`
 - 旁边再写一个同名 `.json` summary
 
+新训练会同时保存 `best_val_loss.ckpt`、`best_action_mse.ckpt` 与
+`best_ema_action_mse.ckpt`；`best.ckpt` 仅保留为 val-loss 兼容别名。
+rollout bundle 应从匹配权重变体的 action-MSE checkpoint 导出：
+
+```bash
+python3 -m flow_matching_test.export_bundle \
+  --ckpt /path/to/best_ema_action_mse.ckpt \
+  --out /path/to/eval_bundle \
+  --weights-variant ema
+```
+
+bundle manifest 会记录 checkpoint 选择标准、raw/EMA 权重变体和源 checkpoint SHA。
+
 ## 协作与分支约定
 
 `main` 是唯一长期分支和可部署事实源；一切改动从最新 `main` 创建短命分支，通过 PR 审查并使用 **Squash and merge** 合并，合并后删除该分支，禁止直接 push `main`（强制分支保护待账号支持后开启）。
@@ -267,6 +280,9 @@ git push -u origin <type>/<description>
 - `flow_matching_test/a2d_dataset.py`：处理后 HDF5 Dataset、切分、归一化与模型输入适配
 - `scripts/preprocess_a2d.py`：原始内嵌 RGB HDF5 转换为训练格式
 - `docs/DATA_PIPELINE.md`：完整数据管线与验证协议
+- `docs/TRAINING_PLANNING_GUIDE.md`：epochs、steps、warmup 与学习率预算
+- `docs/TRAINING_TRICKS_GUIDE.md`：训练技巧、消融顺序与 rollout 决策指南
+- `reports/cfm_a2d_450gb_vit_freeze_ablation_20260721.md`：1,090-episode 五轮 ViT 消融结果
 - `artifacts_index.md`：重要外部产物的位置、SHA-256 与代码血统索引
 - `flow_matching_test/policies/`：统一 policy 接口、factory 与独立的 flow-matching policy 实现
 - `flow_matching_test/model.py`：旧导入路径的兼容别名，已有脚本和 checkpoint 无需迁移

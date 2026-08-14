@@ -4,18 +4,24 @@ import pytest
 import torch
 
 from flow_matching_test.model import RGBConditionedFlowModel
+from flow_matching_test.policies.base import masked_action_mse_per_sample
 from flow_matching_test.policies.factory import build_policy, resolve_policy_type
 from flow_matching_test.policies.flow_matching import FlowMatchingPolicy
 from flow_matching_test.policies.diffusion import DiffusionPolicy
 from flow_matching_test.policies.imle import ImlePolicy
+from flow_matching_test.train import evaluate
 
 
-def _policy(policy_cfg: dict[str, object] | None = None):
+def _policy(
+    policy_cfg: dict[str, object] | None = None,
+    *,
+    use_proprio: bool = True,
+):
     return build_policy(
         policy_cfg=policy_cfg or {"type": "flow_matching"},
         model_cfg={
             "encoder_type": "cnn",
-            "use_proprio": True,
+            "use_proprio": use_proprio,
             "d_model": 16,
             "n_head": 4,
             "n_layer": 1,
@@ -38,7 +44,9 @@ def _batch() -> dict[str, object]:
             "proprio": torch.randn(2, 13),
         },
         "action": torch.randn(2, 4, 13),
+        "action_mask": torch.ones(2, 4),
         "segment_type": torch.tensor([1, 2]),
+        "is_lift": torch.tensor([False, True]),
     }
 
 
@@ -60,6 +68,7 @@ def test_policy_loss_backprop_sampling_and_parameter_groups() -> None:
 
     assert loss.ndim == 0
     assert metrics["flow_loss"] > 0.0
+    assert metrics["lift_loss"] is not None
     assert any(parameter.grad is not None for parameter in policy.parameters())
 
     groups, head, backbone = policy.optimizer_parameter_groups(
@@ -75,6 +84,62 @@ def test_policy_loss_backprop_sampling_and_parameter_groups() -> None:
     sampled = policy.sample_actions(batch["obs"])
     assert sampled.action_normalized.shape == (2, 4, 13)
     assert sampled.action.shape == (2, 4, 13)
+
+
+def test_rgb_only_policy_does_not_require_or_use_proprio() -> None:
+    policy = _policy(use_proprio=False)
+    batch = _batch()
+    obs_without_proprio = {
+        key: value for key, value in batch["obs"].items() if key != "proprio"
+    }
+    batch["obs"] = obs_without_proprio
+
+    loss, _ = policy.compute_loss(batch)
+    loss.backward()
+    sampled = policy.sample_actions(obs_without_proprio)
+
+    assert policy.use_proprio is False
+    assert policy.proprio_proj is None
+    assert sampled.action.shape == (2, 4, 13)
+
+
+def test_masked_action_mse_ignores_padded_timesteps() -> None:
+    prediction = torch.zeros(2, 4, 3)
+    target = torch.zeros_like(prediction)
+    target[0, 0] = 1.0
+    target[0, 1:] = 1000.0
+    target[1] = 2.0
+    action_mask = torch.tensor([[1, 0, 0, 0], [1, 1, 1, 1]])
+
+    per_sample = masked_action_mse_per_sample(prediction, target, action_mask)
+
+    torch.testing.assert_close(per_sample, torch.tensor([1.0, 4.0]))
+
+
+def test_seeded_cfm_validation_is_reproducible() -> None:
+    policy = _policy()
+    batch = _batch()
+    batch["sample_index"] = torch.tensor([3, 9])
+
+    first = evaluate(
+        model=policy,
+        loader=[batch],
+        device=torch.device("cpu"),
+        deterministic_seed=42,
+        sample_draws=3,
+    )
+    torch.manual_seed(999)
+    second = evaluate(
+        model=policy,
+        loader=[batch],
+        device=torch.device("cpu"),
+        deterministic_seed=42,
+        sample_draws=3,
+    )
+
+    assert first.keys() == second.keys()
+    for key in first:
+        assert first[key] == pytest.approx(second[key], rel=1.0e-5, abs=1.0e-7)
 
 
 def test_frozen_backbone_is_excluded_from_optimizer_groups() -> None:

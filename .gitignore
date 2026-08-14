@@ -11,6 +11,7 @@ data-rgb*/
 .mypy_cache/
 .ruff_cache/
 .ipynb_checkpoints/
+.codex/
 
 # === Generated artifacts (bytes stay outside Git; register in artifacts_index.md). ===
 output/
@@ -19,6 +20,7 @@ outputs/
 6data 收敛的结果/
 模型存档/
 结果-图片/
+a2d-450GB/
 checkpoints/
 runs/
 logs/
@@ -26,6 +28,7 @@ wandb/
 tensorboard/
 swanlog/
 eval_bundle*/
+test_bundles/
 hf_cache/
 .pip_cache/
 a2d_curobo_collect_run1/

@@ -6,7 +6,11 @@ import torch
 import torch.nn as nn
 
 from flow_matching_test.observation import build_rgb_obs_composer
-from flow_matching_test.policies.base import ActionPolicy, SamplingResult
+from flow_matching_test.policies.base import (
+    ActionPolicy,
+    SamplingResult,
+    masked_action_mse_per_sample,
+)
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -188,35 +192,115 @@ class FlowMatchingPolicy(ActionPolicy):
         x = self.final_norm(x)
         return self.head(x)
 
-    def compute_loss(self, batch: dict[str, torch.Tensor | dict[str, torch.Tensor]]) -> tuple[torch.Tensor, dict[str, float | None]]:
+    def _compute_loss_with_randomness(
+        self,
+        batch: dict[str, torch.Tensor | dict[str, torch.Tensor]],
+        *,
+        noise: torch.Tensor,
+        timesteps: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float | None]]:
         clean_action = batch["action"]
         if not isinstance(clean_action, torch.Tensor):
             raise TypeError("batch['action'] must be a tensor")
         obs = batch["obs"]
         if not isinstance(obs, dict):
             raise TypeError("batch['obs'] must be a dict of RGB tensors")
-        batch_size = int(clean_action.shape[0])
-        noise = torch.randn_like(clean_action)
-        timesteps = torch.rand(batch_size, device=clean_action.device, dtype=torch.float32)
-        timesteps = timesteps * (1.0 - self.time_eps) + self.time_eps
         t_expand = timesteps[:, None, None].to(clean_action.dtype)
         noisy_action = (1.0 - t_expand) * noise + t_expand * clean_action
         target_velocity = clean_action - noise
         pred_velocity = self(noisy_action=noisy_action, obs=obs, timesteps=timesteps)
-        per_sample_loss = torch.mean((pred_velocity - target_velocity) ** 2, dim=(1, 2))
+        action_mask = batch.get("action_mask")
+        if action_mask is not None and not isinstance(action_mask, torch.Tensor):
+            raise TypeError("batch['action_mask'] must be a tensor")
+        per_sample_loss = masked_action_mse_per_sample(
+            pred_velocity,
+            target_velocity,
+            action_mask,
+        )
         loss = per_sample_loss.mean()
-        segment_losses = {"static_loss": None, "continuous_loss": None, "keyframe_loss": None}
+        segment_losses = {
+            "static_loss": None,
+            "continuous_loss": None,
+            "keyframe_loss": None,
+            "lift_loss": None,
+        }
         segment_type = batch.get("segment_type")
         if isinstance(segment_type, torch.Tensor):
             for segment_id, name in enumerate(("static_loss", "continuous_loss", "keyframe_loss")):
                 mask = segment_type == segment_id
                 if mask.any():
                     segment_losses[name] = float(per_sample_loss[mask].mean().detach().item())
+        is_lift = batch.get("is_lift")
+        if isinstance(is_lift, torch.Tensor):
+            lift_mask = is_lift.bool()
+            if lift_mask.any():
+                segment_losses["lift_loss"] = float(
+                    per_sample_loss[lift_mask].mean().detach().item()
+                )
         return loss, {
             "flow_loss": float(loss.detach().item()),
             "t_mean": float(timesteps.mean().detach().item()),
             **segment_losses,
         }
+
+    def compute_loss(self, batch: dict[str, torch.Tensor | dict[str, torch.Tensor]]) -> tuple[torch.Tensor, dict[str, float | None]]:
+        clean_action = batch["action"]
+        if not isinstance(clean_action, torch.Tensor):
+            raise TypeError("batch['action'] must be a tensor")
+        batch_size = int(clean_action.shape[0])
+        noise = torch.randn_like(clean_action)
+        timesteps = torch.rand(batch_size, device=clean_action.device, dtype=torch.float32)
+        timesteps = timesteps * (1.0 - self.time_eps) + self.time_eps
+        return self._compute_loss_with_randomness(batch, noise=noise, timesteps=timesteps)
+
+    def compute_loss_seeded(
+        self,
+        batch: dict[str, torch.Tensor | dict[str, torch.Tensor]],
+        seeds: list[int],
+    ) -> tuple[torch.Tensor, dict[str, float | None]]:
+        clean_action = batch["action"]
+        if not isinstance(clean_action, torch.Tensor):
+            raise TypeError("batch['action'] must be a tensor")
+        if len(seeds) != int(clean_action.shape[0]):
+            raise ValueError("validation seed count must match batch size")
+        noise_rows = []
+        timestep_rows = []
+        for seed in seeds:
+            generator = torch.Generator(device=clean_action.device)
+            generator.manual_seed(int(seed))
+            noise_rows.append(
+                torch.randn(
+                    (1, *clean_action.shape[1:]),
+                    device=clean_action.device,
+                    dtype=clean_action.dtype,
+                    generator=generator,
+                )
+            )
+            timestep_rows.append(
+                torch.rand((), device=clean_action.device, dtype=torch.float32, generator=generator)
+            )
+        noise = torch.cat(noise_rows, dim=0)
+        timesteps = torch.stack(timestep_rows)
+        timesteps = timesteps * (1.0 - self.time_eps) + self.time_eps
+        return self._compute_loss_with_randomness(batch, noise=noise, timesteps=timesteps)
+
+    def _sample_actions_from_noise(
+        self,
+        *,
+        obs: dict[str, torch.Tensor],
+        action: torch.Tensor,
+    ) -> SamplingResult:
+        batch_size = int(action.shape[0])
+        anchor = next(iter(obs.values()))
+        dt = (1.0 - self.time_eps) / float(self.num_inference_steps)
+        for step_idx in range(self.num_inference_steps):
+            t_value = self.time_eps + dt * float(step_idx)
+            timestep = torch.full((batch_size,), t_value, device=anchor.device, dtype=torch.float32)
+            pred_velocity = self(noisy_action=action, obs=obs, timesteps=timestep).to(action.dtype)
+            action = action + pred_velocity * dt
+        action_normalized = action.float()
+        action_unnormalized = self.denormalize_action(action_normalized)
+        return SamplingResult(action_normalized=action_normalized, action=action_unnormalized)
 
     @torch.no_grad()
     def sample_actions(self, obs: dict[str, torch.Tensor]) -> SamplingResult:
@@ -231,12 +315,29 @@ class FlowMatchingPolicy(ActionPolicy):
             device=anchor.device,
             dtype=anchor.dtype,
         )
-        dt = (1.0 - self.time_eps) / float(self.num_inference_steps)
-        for step_idx in range(self.num_inference_steps):
-            t_value = self.time_eps + dt * float(step_idx)
-            timestep = torch.full((batch_size,), t_value, device=anchor.device, dtype=torch.float32)
-            pred_velocity = self(noisy_action=action, obs=obs, timesteps=timestep).to(action.dtype)
-            action = action + pred_velocity * dt
-        action_normalized = action.float()
-        action_unnormalized = self.denormalize_action(action_normalized)
-        return SamplingResult(action_normalized=action_normalized, action=action_unnormalized)
+        return self._sample_actions_from_noise(obs=obs, action=action)
+
+    @torch.no_grad()
+    def sample_actions_seeded(
+        self,
+        obs: dict[str, torch.Tensor],
+        seeds: list[int],
+    ) -> SamplingResult:
+        anchor = next(iter(obs.values()))
+        if anchor.ndim != 5:
+            raise ValueError("RGB observations must have shape [B,T,3,H,W]")
+        if len(seeds) != int(anchor.shape[0]):
+            raise ValueError("validation seed count must match batch size")
+        rows = []
+        for seed in seeds:
+            generator = torch.Generator(device=anchor.device)
+            generator.manual_seed(int(seed))
+            rows.append(
+                torch.randn(
+                    (1, self.action_horizon, self.action_dim),
+                    device=anchor.device,
+                    dtype=anchor.dtype,
+                    generator=generator,
+                )
+            )
+        return self._sample_actions_from_noise(obs=obs, action=torch.cat(rows, dim=0))

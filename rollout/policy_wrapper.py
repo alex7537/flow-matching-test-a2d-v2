@@ -58,6 +58,7 @@ class Policy:
             action_std=torch.from_numpy(action_std).to(self.device),
         )
         self.model.eval()
+        self.use_proprio = bool(self.cfg["model"].get("use_proprio", True))
         self.history_steps = int(self.cfg["obs"]["history_steps"])
         self.image_size = int(self.cfg["obs"]["image_size"])
         self.camera_map = {
@@ -197,18 +198,22 @@ class Policy:
             if sim_name not in images:
                 raise KeyError(f"missing rollout camera image: {sim_name}")
             self._history[model_key].append(self._prepare_image(images[sim_name]))
-        self._state_history.append(self._normalize_state(obs["proprio"]))
+        if self.use_proprio:
+            if "proprio" not in obs:
+                raise KeyError("missing proprio observation for a proprio-conditioned policy")
+            self._state_history.append(self._normalize_state(obs["proprio"]))
 
         model_obs: dict[str, torch.Tensor] = {}
         for model_key, history in self._history.items():
             while len(history) < self.history_steps:
                 history.appendleft(history[0].clone())
             model_obs[model_key] = torch.stack(list(history), dim=0).unsqueeze(0).to(self.device)
-        while len(self._state_history) < self.history_steps:
-            self._state_history.appendleft(self._state_history[0].copy())
-        model_obs["proprio"] = torch.from_numpy(
-            np.concatenate(list(self._state_history), axis=0)
-        ).unsqueeze(0).to(self.device)
+        if self.use_proprio:
+            while len(self._state_history) < self.history_steps:
+                self._state_history.appendleft(self._state_history[0].copy())
+            model_obs["proprio"] = torch.from_numpy(
+                np.concatenate(list(self._state_history), axis=0)
+            ).unsqueeze(0).to(self.device)
 
         devices = [self.device.index or 0] if self.device.type == "cuda" else []
         with torch.random.fork_rng(devices=devices):

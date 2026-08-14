@@ -1,0 +1,109 @@
+data:
+  data_dir: /share_data/zhangyurui/flow-matching-test-a2d-v2/datasets/data-rgb-450gb-v2-exact-dedup-keep-last
+  image_keys:
+  - rgb_head
+  - rgb_right_hand
+  image_size: 224
+  val_ratio: 0.1
+  history_steps: 1
+  action_horizon: 16
+  action_offset_steps: 1
+  transition_oversample_factor: 2
+  transition_threshold: 0.1
+  motion_threshold: 0.0001
+  norm_stats: norm_stats.json
+  dataset_manifest: dataset_manifest.json
+  split_manifest: split_manifest.json
+  range_eps: 0.0001
+  aug_brightness: 0.2
+  aug_contrast: 0.4
+  aug_saturation: 0.2
+  aug_hue: 0.05
+  max_open_hdf5_files: 64
+
+policy:
+  type: flow_matching
+
+model:
+  encoder_type: timm
+  use_proprio: true
+  timm_model_name: vit_small_r26_s32_224
+  timm_pretrained: true
+  timm_token_mode: spatial
+  timm_tokens_per_frame: 49
+  d_model: 384
+  n_head: 4
+  n_layer: 4
+  dropout: 0.0
+  time_eps: 0.001
+  num_inference_steps: 5
+  freeze_encoder_backbone: false
+
+training:
+  seed: 42
+  device: cuda
+  batch_size: 32
+  num_workers: 4
+  pin_memory: true
+  lr: 0.00005
+  backbone_lr_multiplier: 0.1
+  weight_decay: 0.0001
+  betas:
+  - 0.9
+  - 0.95
+  grad_clip: 1.0
+  warmup_steps: 506
+  num_epochs: 2
+  max_train_steps: null
+  max_val_steps: null
+  init_from: /share_data/zhangyurui/flow-matching-test-a2d-v2/runs/cfm_1090ep_v2_exact_dedup_vit_finetune_01x_5ep_seed42_20260727/best.ckpt
+  resume_from: null
+  ema_enabled: true
+  ema_decay: 0.999
+  watchdog_timeout_sec: 300
+  watchdog_check_interval_sec: 10
+  run_name: cfm_1090ep_v2_exact_dedup_stage2_lr5e5_bb01_2ep_seed42_20260727
+  output_dir: /share_data/zhangyurui/flow-matching-test-a2d-v2/runs/{run_name}
+
+validation:
+  deterministic: true
+  seed: 42
+  sample_draws: 3
+
+logging:
+  wandb:
+    enabled: true
+    mode: online
+    project: a2d-flow-matching
+    entity: z1135783608-psibot
+    group: cfm-v2-exact-dedup-stage2-20260727
+    job_type: train
+    tags:
+    - a800
+    - rgb
+    - flow-matching
+    - timm
+    - exact-dedup
+    - keep-last
+    - stage2
+    - model-only-init
+    - lr-5e-5
+    - backbone-0.1x
+    - 2ep
+    - 10126-steps
+    - deterministic-val
+    - ema
+    - watchdog
+    - seed42
+
+visualization:
+  rerun:
+    enabled: false
+
+deployment:
+  eval_bundle:
+    enabled: true
+    execute_horizon: 16
+    archive: true
+    weights_variant: raw
+    data_version: a2d_450gb_rgb_v2_exact_dedup_keep_last_stage2

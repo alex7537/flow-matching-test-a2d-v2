@@ -143,6 +143,50 @@ training:
 10. **数据集版本不可原地改写 stats**：train 成员变化后创建新数据目录或使用新的 `--norm-stats` 文件名，旧 checkpoint 继续绑定旧摘要。
 11. **动作窗口默认向未来偏移一帧**：`obs[t] → action[t+1:t+1+H]`；窗口完整性过滤、关键帧窗口标签与过采样使用同一偏移范围。旧 checkpoint 缺少 `action_offset_steps` 时按 `0` 解释。
 
+### 精确重复 joint frame 的派生过滤层
+
+需要移除全 13 维 executed joint position 完全相等的相邻帧时，必须生成新数据版本，
+不可原地修改已有 HDF5：
+
+```bash
+python scripts/filter_exact_duplicate_joint_frames.py \
+  --source data-rgb-450gb-v1 \
+  --destination data-rgb-450gb-v2-exact-dedup-keep-last \
+  --data-version a2d_450gb_rgb_v2_exact_dedup_keep_last
+```
+
+过滤规则为：若 `action[t] == action[t+1]` 的 13 个 float 值完全相等，则删除 `t`、
+保留 `t+1`，从而保留 phase 转换后的标签（例如末尾 `lift-servo → lift` 中的
+`lift`）。图像、qpos、action 和 phase 使用同一个 frame mask，随后重新计算
+segmentation、train-only normalization、dataset manifest 和 split manifest。
+`L2 <= 1e-4` 的近似不变帧不在此过滤范围内。
+
+### episode 尾部 lift window
+
+默认的完整窗口模式只保留满足
+`t + action_offset_steps + action_horizon <= episode_length` 的样本。这样不会把
+padding 误当成真值，但会让每条 episode 的最后 `action_horizon` 帧无法作为
+observation。对于 lift 位于轨迹末尾的数据，可显式开启：
+
+```yaml
+data:
+  include_tail_padded_windows: true
+  lift_oversample_factor: 2
+```
+
+开启后，Dataset 保留仍有至少一个未来 action 的尾部 observation，将不足
+`action_horizon` 的部分重复最后一个真实 action，并返回 `action_mask`。CFM、
+Diffusion 和 IMLE 的训练 loss 及 validation sampled-action MSE 都只统计 mask
+为 1 的真实 timestep。窗口的未来 phase 中包含 `lift` 时返回 `is_lift=true`，
+仅在 train split 按 `lift_oversample_factor` 增采样，并记录 `lift_loss` 与
+`lift_sample_action_mse`。
+
+该开关会改变 samples/epoch 和 LR schedule 的总 step，不得用于原 optimizer
+checkpoint 的直接 resume；如从旧模型继续，应使用 model-only `init_from`，
+重新建立 optimizer、warmup 和 cosine schedule。当前 1090-episode v2 数据在
+`transition=2x`、`lift=2x` 下为 220,026 个有效 train samples，即 batch size 32
+时 6,876 steps/epoch。
+
 ## 6. 待确认项(部署前必须核对)
 
 - [ ] **waist_pos 是否进 state**:读若干 episode 检查 `trajectory/waist_pos` 的 std。接近 0 → 不加;明显变化 → 预处理加 `--include-waist`(它影响相机视角与手臂基座,不可忽略)。

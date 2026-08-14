@@ -98,6 +98,16 @@ class WandbLogger:
         except Exception as exc:  # pragma: no cover - depends on external service
             self._disable("summary update", exc)
 
+    def alert(self, *, title: str, text: str, level: str = "ERROR") -> None:
+        if not self.enabled or self.run is None:
+            return
+        try:
+            alert_levels = getattr(wandb, "AlertLevel", None)
+            alert_level = getattr(alert_levels, level.upper(), level.upper())
+            self.run.alert(title=str(title), text=str(text), level=alert_level)
+        except Exception as exc:  # pragma: no cover - depends on external service
+            logger.warning("wandb alert failed: %s", exc)
+
     def save_text(self, name: str, content: str) -> None:
         if not self.enabled or self.run is None:
             return
@@ -108,11 +118,14 @@ class WandbLogger:
         except Exception as exc:  # pragma: no cover - depends on external service
             self._disable("artifact save", exc)
 
-    def finish(self) -> None:
+    def finish(self, *, exit_code: int | None = None) -> None:
         if not self.enabled or self.run is None:
             return
         try:
-            self.run.finish()
+            if exit_code is None:
+                self.run.finish()
+            else:
+                self.run.finish(exit_code=int(exit_code))
             self.run = None
         except Exception as exc:  # pragma: no cover - depends on external service
             self._disable("finish", exc)

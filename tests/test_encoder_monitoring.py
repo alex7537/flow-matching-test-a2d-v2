@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+
 import torch
 
 from flow_matching_test.policies.factory import build_policy
@@ -10,6 +12,7 @@ from flow_matching_test.train import (
     _parameter_update_ratio,
     _set_backbone_frozen,
     _snapshot_parameters,
+    _update_ema_model,
 )
 
 
@@ -91,4 +94,22 @@ def test_set_backbone_frozen_preserves_trainable_policy_head() -> None:
         parameter.requires_grad
         for parameter in policy.parameters()
         if id(parameter) not in backbone_ids
+    )
+
+
+def test_ema_update_does_not_modify_training_weights() -> None:
+    policy = _policy()
+    ema_policy = copy.deepcopy(policy)
+    parameter_name, parameter = next(iter(policy.named_parameters()))
+    ema_before = dict(ema_policy.named_parameters())[parameter_name].detach().clone()
+    with torch.no_grad():
+        parameter.add_(1.0)
+    raw_before = parameter.detach().clone()
+
+    _update_ema_model(ema_policy, policy, decay=0.5)
+
+    torch.testing.assert_close(parameter, raw_before)
+    torch.testing.assert_close(
+        dict(ema_policy.named_parameters())[parameter_name],
+        0.5 * ema_before + 0.5 * raw_before,
     )

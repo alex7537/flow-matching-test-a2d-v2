@@ -2,6 +2,30 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-07-22｜1,090-episode ViT 0.1× Level 0 测试包落地
+
+- 从 A800 的 best epoch 4 / step 25,445 导出 bundle v2，固定 `offset=1`、双 RGB
+  `640×480`、16×13 action chunk、execute horizon 16 与 CFM 5-step 推理合同。
+- 使用固定 val[0] frame 0、seed `20260721` 重新加载 bundle，16×13 输出最大绝对误差
+  为 `0.0`，有限值与动作范围哨兵通过；目录内 `sha256sum -c SHA256SUMS` 全绿。
+- 本机交付目录为 `~/rollout_handoff/level0_prep_1090ep_cfm_vit_finetune_01x_step25445/`；
+  单文件 tar SHA-256 为 `f0eeb5d75bf92d93dc54b46d4c40c5b00ec474d04b49bb51646b0bc510c4cd4c`。
+- 因训练工作树非 clean，测试包额外携带 `training_source.patch`、untracked source、
+  resolved config、metrics、summary 和 A800 requirements lock，禁止只按 Git HEAD 复现。
+
+## 2026-07-21｜A2D 450GB 五轮 ViT 冻结 / 0.1× 消融完成
+
+- 基于 1,090 episodes、162,844 个 oversampling 后有效训练窗口，完成 Frozen 与
+  Fine-tune 0.1× 的同预算实验：各 5 epochs / 25,445 steps / warmup 1,272，
+  `action_offset_steps=1`，两组均无 failure。
+- 0.1× 最终 `val_loss=0.022643`、`val_keyframe_loss=0.030506`、
+  `val_sample_action_mse=0.005561`，相对 Frozen 分别改善 7.19%、6.63%、16.75%；
+  当前将 0.1× 记为 offline baseline，最终选择等待固定协议 rollout。
+- 两组 cosine LR 已衰减到 0，不原样续训。若 rollout 证明仍需增加预算，只为胜出
+  候选建立独立 stage 2 schedule；Frozen 保留为 rollout 对照。
+- 新增 `reports/cfm_a2d_450gb_vit_freeze_ablation_20260721.md`，记录完整曲线判断、
+  W&B run、checkpoint/config SHA 与 dirty-worktree 可复现性风险。
+
 ## 2026-07-20｜Frozen ViT 下一帧动作模型与推理包
 
 - 完成 Frozen ViT 与 ViT Fine-tune 0.1× 的受控消融；Frozen 的 best val flow loss 为 `0.041467`，Fine-tune 为 `0.061160`。微调虽然获得更低 train loss，但 validation gap 更大，因此当前 66-episode 数据规模选择冻结预训练 ViT。

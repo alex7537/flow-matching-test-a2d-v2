@@ -46,3 +46,48 @@ def test_wandb_environment_override_and_failure_degrade(monkeypatch, caplog, tmp
     assert fake.run.calls == 1
     assert not logger.enabled
     assert caplog.text.count("disabling wandb for this run") == 1
+
+
+def test_wandb_alert_and_failed_finish(monkeypatch, tmp_path) -> None:
+    class FakeRun:
+        def __init__(self) -> None:
+            self.alert_kwargs = None
+            self.exit_code = None
+
+        def alert(self, **kwargs) -> None:
+            self.alert_kwargs = kwargs
+
+        def finish(self, *, exit_code=None) -> None:
+            self.exit_code = exit_code
+
+    class FakeAlertLevel:
+        ERROR = "error-level"
+
+    class FakeWandb:
+        AlertLevel = FakeAlertLevel
+
+        def __init__(self) -> None:
+            self.run = FakeRun()
+
+        def init(self, **kwargs):
+            return self.run
+
+    fake = FakeWandb()
+    monkeypatch.setattr(wandb_module, "wandb", fake)
+    logger = wandb_module.WandbLogger(
+        enabled=True,
+        output_dir=str(tmp_path),
+        project="test",
+        entity=None,
+        run_name="test-run",
+    )
+
+    logger.alert(title="stalled", text="no heartbeat", level="ERROR")
+    logger.finish(exit_code=1)
+
+    assert fake.run.alert_kwargs == {
+        "title": "stalled",
+        "text": "no heartbeat",
+        "level": "error-level",
+    }
+    assert fake.run.exit_code == 1
