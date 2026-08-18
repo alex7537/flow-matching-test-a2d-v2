@@ -1,106 +1,85 @@
 # Flow Matching Test
 
-本仓库是面向 A2D 机器人操作数据的 RGB + proprio 条件动作块训练与评测框架，以 Flow Matching 为当前已验证主线，并保留尚待完整验证的 RS-IMLE 与 Diffusion Policy 实验实现。
+面向 A2D 机器人抓取数据的连续动作策略训练与部署仓库。当前已验证主线是双 RGB（可选 proprio）条件的 Flow Matching；RS-IMLE 与 Diffusion Policy 保留为对比实现。
 
-当前仓库只保留一条主线：
-
-- 条件输入是可配置 RGB 视角子集；可用视角为 `rgb_head`、`rgb_left_hand`、`rgb_right_hand`，训练时通过 `data.image_keys` 选择一路、两路或三路
-- 监督目标默认是绝对 joint target；需要 delta 时必须配套计算 delta stats
-- 模型输出未来一段 joint action chunk
-
-RGB encoder 现在支持两种后端：
-
-- `cnn`：当前仓库自带的最小共享 CNN，便于本地 smoke test
-- `timm`：更贴近 `fan_dev` 的视觉路线，可切到 `vit_small_r26_s32_224`
-
-## 唯一数据主线
-
-仓库不再支持“旧 HDF5 + 外部 JPEG 目录”。唯一输入链路是：
+## 当前主线
 
 ```text
-原始新 HDF5（trajectory/cameras/rgb_* 内嵌 RGB）
-  -> scripts/preprocess_a2d.py
-处理后 HDF5（observations/rgb_* 为逐帧 JPEG，含 qpos/action/phase）
-  -> flow_matching_test.a2d_dataset --compute-stats
-index_cache.json + norm_stats.json
-  -> flow_matching_test.train
+processed HDF5
+  -> A2DProcessedWindowDataset
+  -> RGB / proprio condition tokens
+  -> Flow Matching action policy
+  -> 16 × 13 absolute-joint action chunk
+  -> checkpoint / verified rollout bundle
 ```
 
-原始文件中的 state/action 映射为：
+当前 V3 数据契约：
 
-- state：`arm2_pos(7) + hand2_pos(6)`
-- action：`arm2_pos(7) + hand2_pos(6)`
+```text
+observation/qpos = arm2_pos(7) + hand2_pos(6)
+                  实际手臂状态 + 实际手部状态
 
-action 固定为 13 维实际执行关节位置，归一化统计使用 train episodes 的逐维 min/max；稀疏的 `*_pos_target` 不参与训练标签。
-默认 `action_offset_steps=1`，因此时刻 `t` 的观测对应
-`action[t+1:t+1+action_horizon]`；输出 `chunk[0]` 是下一帧绝对关节位置，
-不再重复当前 proprio。旧 checkpoint 未记录该字段时按历史语义 `offset=0` 解释，不能
-与新窗口语义混用或直接 resume。
+action           = arm2_pos(7) + hand2_pos_target(6)
+                  实际手臂轨迹 + 手部 commanded target
+```
 
-模型条件输入默认包含配置选中的 RGB spatial tokens 和归一化 13 维 proprio state token。
+V3 的目的不是把 target 当作 observation，而是把稳定的手部控制意图作为未来 action GT，避免模型模仿接触、回弹和跟踪误差造成的实际手指抖动。action 语义会写入 dataset、normalizer、checkpoint、bundle 与 rollout contract，混用旧语义时直接报错。
 
-## Policy 对比实验
+## 时间窗口与尾部标签
 
-训练器与具体策略已解耦，配置通过 `policy.type` 选择策略；当前实现为：
+默认配置：
+
+```text
+history_steps       = 1
+action_offset_steps = 1
+action_horizon      = 16
+```
+
+所以训练对齐为：
+
+```text
+obs[t] -> action[t+1 : t+17]
+obs[t+1] -> action[t+2 : t+18]
+```
+
+窗口以 stride 1 逐帧滑动。episode 尾部不足 16 步时重复最后一个真实 action 以保持固定形状，同时返回 `action_mask`；padding 位置不参与 loss。`include_tail_padded_windows: true` 会保留每个 episode 最后 15 个窗口，其中包含 lift 的窗口还会设置 `is_lift=true`，训练集可通过 `lift_oversample_factor` 增加曝光。
+
+## 模型
+
+Observation condition：
+
+- 每路 RGB 经共享 CNN 或 timm/ViT encoder 产生视觉 tokens；
+- RGB+proprio 模型将归一化 13 维实际 qpos 投影为一个 proprio token；
+- 纯 RGB 模型设置 `model.use_proprio: false`。
+
+Flow Matching 训练：
+
+```text
+clean action A, noise Z, flow time τ
+Xτ = (1-τ)Z + τA
+target velocity = A - Z
+
+noisy action tokens --self-attention--+
+                                      +--> velocity head --> masked MSE
+observation tokens ----cross-attention+
+```
+
+推理从随机 action noise 开始，按配置的 CFM steps 积分得到未来 action chunk。
+
+## Policy
+
+配置通过 `policy.type` 选择：
 
 ```yaml
 policy:
-  type: flow_matching
+  type: flow_matching  # flow_matching | imle | diffusion
 ```
 
-策略实现放在 `flow_matching_test/policies/`。新增 policy 时各自实现
-`ActionPolicy.compute_loss()` 与 `sample_actions()`，并在 factory 注册新的
-`policy.type`；训练循环统一负责 `loss.backward()`、optimizer、checkpoint 和日志，
-无需为每种 loss 复制一份 trainer。当前支持：
+三种 policy 的训练目标与数值空间不同，loss 不可直接横向排名。正式比较必须固定数据、split、网络、step budget 与 seed，并使用 rollout 成功率、action MSE 和推理延迟。
 
-- `flow_matching`：连续时间速度场目标，Euler 采样
-- `imle`：与 psi-policy 对齐的 RS-IMLE 候选匹配，默认每个条件 20 个候选
-- `diffusion`：离散 cosine noise schedule 的 epsilon 预测，默认 15 步 DDIM 采样
+## 快速开始
 
-三种 policy 的 loss 数值空间不同，不应直接横向比较；正式比较使用同一数据、网络
-主体、训练步数与 seed，并以 rollout 成功率、sample action MSE 和推理延迟为准。
-
-先执行预处理（示例选择两路相机）：
-
-```bash
-python3 scripts/preprocess_a2d.py \
-  --src /path/to/new_raw_hdf5/success \
-  --dst /path/to/a2d_processed \
-  --image-keys rgb_head rgb_right_hand \
-  --image-size 224 --jpeg-quality 92 --workers 4
-```
-
-再建立索引和归一化统计：
-
-```bash
-python3 -m flow_matching_test.a2d_dataset \
-  --data-dir /path/to/a2d_processed \
-  --image-keys rgb_head rgb_right_hand \
-  --compute-stats --rebuild-index
-```
-
-如果你要更贴近 `fan_dev`，推荐用 `timm` 后端，并把 `timm_model_name` 设为
-`vit_small_r26_s32_224`。
-
-## `timm` 最小检查
-
-如果你想先确认环境是否支持 `vit_small_r26_s32_224`，推荐按这 3 步做：
-
-1. 安装 `timm`
-
-```bash
-pip install timm
-```
-
-2. 先只检查模型名是否存在
-
-```bash
-python3 -m flow_matching_test.check_timm_env \
-  --model-name vit_small_r26_s32_224 \
-  --list-only
-```
-
-3. 再检查能否真正实例化和前向
+环境检查：
 
 ```bash
 python3 -m flow_matching_test.check_timm_env \
@@ -108,227 +87,91 @@ python3 -m flow_matching_test.check_timm_env \
   --pretrained
 ```
 
-如果第 3 步能通过，基本说明：
-
-- 当前环境里已经有 `timm`
-- 这个模型名在当前 `timm` 版本中可用
-- 预训练权重可以下载或从缓存中加载
-- 该 backbone 至少能完成一次最小前向
-
-## 模型主链路
-
-```text
-selected RGB views -> encoder token map -> ObsComposer -> obs tokens
-noisy action chunk + time embedding -> action tokens
-action self-attn + cross-attn to obs tokens
-predict velocity
-MSE(pred_velocity, target_velocity)
-```
-
-loss 目前只有一个：
-
-- 标准 flow matching velocity MSE
-- 训练时间参数采用 `t ~ Uniform(time_eps, 1.0)` 的 straight-line CFM
-
-## 启动训练
-
-最小 `cnn` 版本：
-
-```bash
-cd /home/psibot/Downloads/flow-matching-test
-python3 -m flow_matching_test.train \
-  --config configs/minimal_rgb_flow.yaml \
-  data.data_dir=/path/to/a2d_processed
-```
-
-`timm` 版本：
-
-```bash
-python3 -m flow_matching_test.train \
-  --config configs/minimal_rgb_flow_timm.yaml \
-  data.data_dir=/path/to/a2d_processed
-```
-
-如果你想把训练过程同步写成 `rerun` 的 `.rrd`：
-
-```bash
-python3 -m flow_matching_test.train \
-  --config configs/minimal_rgb_flow.yaml \
-  data.data_dir=/path/to/a2d_processed \
-  visualization.rerun.enabled=true
-```
-
-当前最小 `rerun` 链路会记录：
-
-- 每个 epoch 的训练/验证标量
-- 一条 sample 的所选 RGB 输入
-- 这条 sample 的 GT / Pred action chunk
-- 归一化动作空间与反归一化动作空间下的 action 曲线
-
-默认输出到当前 run 目录下的 `training.rrd`。
-
-如果你想把训练指标同步打到 `wandb`：
-
-```bash
-# A800:先在 W&B 撤销曾暴露的旧 key，再交互式写入容器本地密钥文件。
-install -d -m 700 /root/.secrets
-read -rsp "New W&B API key: " WANDB_KEY && echo
-install -m 600 /dev/null /root/.secrets/wandb_api_key
-printf '%s' "$WANDB_KEY" > /root/.secrets/wandb_api_key
-unset WANDB_KEY
-
-source ./activate_a800.sh  # 自动读取 /root/.secrets/wandb_api_key
-
-WANDB_MODE=online python3 -m flow_matching_test.train \
-  --config configs/minimal_rgb_flow.yaml \
-  data.data_dir=/path/to/a2d_processed \
-  logging.wandb.enabled=true
-```
-
-当前最小 `wandb` 链路会记录：
-
-- 每个 epoch 的 train/val、static/continuous/keyframe loss 与 sample action MSE
-- head/backbone 两组学习率，以及两组梯度范数的 epoch mean/max
-- 三个不参与反向传播的视觉 encoder 监控指标：
-  - `encoder_update_ratio`：一个 epoch 内 backbone 参数实际变化量 / epoch 初参数量
-  - `encoder_grad_param_ratio_mean`：backbone 梯度范数 / backbone 参数范数的 batch 均值
-  - `encoder_feature_std`：诊断 batch 上原始视觉 token 的逐通道标准差均值，用于监测特征坍缩
-- git、dataset、stats、split、segmentation provenance
-- 本次 run 的配置、`best_epoch / best_val_loss` 与最终 summary
-
-这三个 encoder 指标只用于观察，不会加到 CFM、RS-IMLE 或 Diffusion 的训练 loss，
-因此不会改变现有三 policy 的优化目标或公平比较协议。
-
-默认使用 offline 模式，W&B 异常会自动降级为 no-op，不会中断训练；短任务需要实时同步时才临时设置 `WANDB_MODE=online`。
-
-A800 的 `HOME` 被显式重定向到共享 CFS 的 `$WORK/home`，只用于非敏感缓存且目录权限固定为 `700`；任何 API key、SSH key、token 与 shell history 都不得写入该目录，W&B 凭据只允许由 TI-ONE Secret 注入或保存在容器本地 `/root/.secrets/wandb_api_key`（`600`，容器重建后重新注入）。
-
-如果只是本地先试，不想真的上传远端，可以这样：
-
-```bash
-python3 -m flow_matching_test.train \
-  --config configs/minimal_rgb_flow.yaml \
-  data.data_dir=/path/to/a2d_processed \
-  logging.wandb.enabled=true
-```
-
-常用 smoke test：
+CPU smoke test：
 
 ```bash
 python3 -m flow_matching_test.train \
   --config configs/cpu_smoke.yaml \
-  data.data_dir=/path/to/a2d_processed \
+  data.data_dir=/path/to/processed_dataset \
   training.output_dir=/tmp/a2d_cpu_smoke
 ```
 
-`cpu_smoke.yaml` 使用 CNN、两路 64×64 RGB、batch size 2、2 epochs；每个 epoch
-只运行 2 个 train batch 和 1 个 val batch。它只验证数据、前后向、指标和 checkpoint
-链路，不能用于判断模型是否收敛。
-
-如果你已经有了 `best.ckpt`，也可以像 `fan_dev` 那样单独导出 checkpoint eval 的 `.rrd`：
+V3 RGB+proprio 100 epochs：
 
 ```bash
-python3 -m flow_matching_test.export_rerun_eval \
-  --ckpt /path/to/best.ckpt \
-  --split val \
-  --num-samples 8
+python3 -u -m flow_matching_test.train \
+  --config configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_100ep_scratch.yaml
 ```
 
-这个脚本会：
+V3 纯 RGB 100 epochs：
 
-- 重新加载 checkpoint 和配置
-- 在 `train` 或 `val` split 上取若干条 sample
-- 导出 RGB + GT/Pred action 的 `.rrd`
-- 旁边再写一个同名 `.json` summary
+```bash
+python3 -u -m flow_matching_test.train \
+  --config configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_rgb_only_100ep_scratch.yaml
+```
 
-新训练会同时保存 `best_val_loss.ckpt`、`best_action_mse.ckpt` 与
-`best_ema_action_mse.ckpt`；`best.ckpt` 仅保留为 val-loss 兼容别名。
-rollout bundle 应从匹配权重变体的 action-MSE checkpoint 导出：
+训练目录包含：
+
+```text
+config_resolved.yaml
+metrics.jsonl
+latest.ckpt
+best_val_loss.ckpt
+best_action_mse.ckpt
+best_ema_action_mse.ckpt
+summary.json
+```
+
+实时查看每轮指标：
+
+```bash
+tail -F /path/to/run/metrics.jsonl
+```
+
+## 导出部署 bundle
+
+优先按 rollout 目标选择 action-MSE checkpoint，不要默认最后一轮最好：
 
 ```bash
 python3 -m flow_matching_test.export_bundle \
   --ckpt /path/to/best_ema_action_mse.ckpt \
   --out /path/to/eval_bundle \
-  --weights-variant ema
-```
-
-bundle manifest 会记录 checkpoint 选择标准、raw/EMA 权重变体和源 checkpoint SHA。
-
-## 协作与分支约定
-
-`main` 是唯一长期分支和可部署事实源；一切改动从最新 `main` 创建短命分支，通过 PR 审查并使用 **Squash and merge** 合并，合并后删除该分支，禁止直接 push `main`（强制分支保护待账号支持后开启）。
-
-本仓库发布不依赖 GitHub CLI `gh`，不得因其缺失阻塞发布；前置检查仅要求 `git remote -v` 指向正确的 `origin` 且 `ssh -T git@github.com` 认证通过，提交与推送使用原生 Git，PR 通过 GitHub 网页或已连接的 GitHub 接口创建。
-
-分支名使用 `<类型>/<描述>`，例如 `fix/runbook-typo`、`report/level0`、`feat/prefix-mask`；A800、bundle manifest 和 runbook 中的 `git_sha` 始终指向已合并的 `main` commit，不使用未合并分支作为正式训练或部署基线。
-
-训练、评估与部署产物本体不进入 Git；统一登记到 `artifacts_index.md`，记录存放位置、SHA-256 与对应 `git_sha`。训练曲线保存在 W&B，交付级模型保存在自包含 bundle、A800 或 COS。
-
-标准流程：
-
-```bash
-git switch main
-git pull --ff-only origin main
-git switch -c <type>/<description>
-# 修改、验证、commit
-git push -u origin <type>/<description>
-# 在 GitHub 创建 PR → review → Squash and merge → 删除远程与本地短命分支
-```
-
-## 文件说明
-
-- `flow_matching_test/a2d_dataset.py`：处理后 HDF5 Dataset、切分、归一化与模型输入适配
-- `scripts/preprocess_a2d.py`：原始内嵌 RGB HDF5 转换为训练格式
-- `docs/DATA_PIPELINE.md`：完整数据管线与验证协议
-- `docs/TRAINING_PLANNING_GUIDE.md`：epochs、steps、warmup 与学习率预算
-- `docs/TRAINING_TRICKS_GUIDE.md`：训练技巧、消融顺序与 rollout 决策指南
-- `reports/cfm_a2d_450gb_vit_freeze_ablation_20260721.md`：1,090-episode 五轮 ViT 消融结果
-- `artifacts_index.md`：重要外部产物的位置、SHA-256 与代码血统索引
-- `flow_matching_test/policies/`：统一 policy 接口、factory 与独立的 flow-matching policy 实现
-- `flow_matching_test/model.py`：旧导入路径的兼容别名，已有脚本和 checkpoint 无需迁移
-- `flow_matching_test/observation.py`：最小 observation 模块，负责 encoder / concat / obs composer
-- `flow_matching_test/check_timm_env.py`：检查 `timm` 环境、模型名和预训练权重是否可用
-- `flow_matching_test/rerun_logger.py`：最小 `rerun` 训练/评估可视化封装
-- `flow_matching_test/wandb_logger.py`：最小 `wandb` 实验日志封装
-- `flow_matching_test/export_rerun_eval.py`：加载 `best.ckpt` 并导出 checkpoint eval `.rrd`
-- `flow_matching_test/train.py`：训练循环、验证和 checkpoint
-- `flow_matching_test/export_bundle.py`：将 checkpoint 导出为带哈希校验的 rollout bundle
-- `rollout/`：Isaac Sim 4.5 固定网格 rollout、三阶段判据与结果汇总
-- `configs/minimal_rgb_flow.yaml`：`cnn` 版配置
-- `configs/minimal_rgb_flow_timm.yaml`：`timm` 版配置
-
-## Rollout bundle 与 Isaac Sim
-
-手工导出一个 bundle：
-
-```bash
-python3 -m flow_matching_test.export_bundle \
-  --ckpt /path/to/best.ckpt \
-  --out /path/to/eval_bundle_fm_step50k \
-  --execute-horizon 8 \
+  --weights-variant ema \
+  --execute-horizon 16 \
   --data-version DATA_VERSION \
   --archive
 ```
 
-也可以将训练配置中的 `deployment.eval_bundle.enabled` 改为 `true`，每次出现新的
-best checkpoint 时会自动生成 `eval_bundles/eval_bundle_<run>_step<step>.tgz`。
+Bundle manifest 会记录 action 语义、raw/EMA 权重、checkpoint 选择标准、训练 epoch/step、数据版本和内部文件 SHA256。部署 bundle 不是可恢复训练的完整 checkpoint。
 
-在 4090 的 Isaac Sim 容器中运行：
+## 验证
 
 ```bash
-/isaac-sim/python.sh rollout/run_rollout.py \
-  --bundle /workspace/bundles/eval_bundle_fm_step50k \
-  --grid rollout/eval_grid.yaml \
-  --out /workspace/results/fm_step50k
-
-/isaac-sim/python.sh rollout/report.py --in /workspace/results/fm_step50k
+python3 -m pytest -q
+git diff --check
 ```
 
-首次运行前必须在 `rollout/eval_grid.yaml:sim` 填入已校准场景 USD、机器人/物体/
-末端/相机 prim path、13 个实际 articulation DOF 名称以及至少两个接触传感器路径。
-当前数据的 action 顺序是右臂 7 个主动关节，加右手 6 个主动关节：
-`1_1, 2_1, 3_1, 4_1, 5_1, 1_2`。本机已有
-`/home/psibot/Downloads/InspiredHand_RuiYan/RuiYan_Hand_Right_Mimic.usd`；应使用该
-Mimic 资产，让另外 5 个手部关节按资产内规则联动：拇指 `1_3 = 1.675 * 1_2`，
-其余四指的远端关节与对应近端关节保持 `1.0` 倍。rollout 只下发上述 6 个主动
-手部 DOF，不应再额外拟合或重复下发 11 个手部 DOF。
+数据更新时至少核对：
+
+- episode、split 与 manifest SHA；
+- action 语义和 13 维 layout；
+- base/effective samples、tail/lift/transition windows；
+- steps/epoch、total steps 与 warmup；
+- checkpoint 与 bundle provenance。
+
+## 文档与入口
+
+- [`CHANGE.md`](CHANGE.md)：按时间倒序记录重要更新；
+- [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：数据、split、padding、oversampling 与标签契约；
+- [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR schedule；
+- [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练技巧与停止/续训判断；
+- [`docs/POLICY_COMPARISON_PROTOCOL.md`](docs/POLICY_COMPARISON_PROTOCOL.md)：多 policy 公平对比；
+- [`artifacts_index.md`](artifacts_index.md)：外部模型和评测产物索引；
+- [`train+deploy/handoff_runbook.md`](train+deploy/handoff_runbook.md)：部署交付流程；
+- `flow_matching_test/a2d_dataset.py`：训练 Dataset；
+- `flow_matching_test/policies/`：policy 接口与实现；
+- `flow_matching_test/train.py`：训练、验证、EMA 与 checkpoint；
+- `flow_matching_test/export_bundle.py`：自包含部署包；
+- `rollout/`：Isaac Sim rollout 与结果汇总。
+
+训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git；只在 `artifacts_index.md` 中登记位置、SHA256、数据版本与 Git commit。

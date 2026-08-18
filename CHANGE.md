@@ -2,6 +2,32 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-08-18｜V3 手部 commanded target 动作语义落地
+
+- `4782456` 将 V3 action 定义为 `arm2_pos(7) + hand2_pos_target(6)`；observation 仍使用实际 `arm2_pos(7) + hand2_pos(6)`，因此 target 是未来 action GT，不是 encoder 输入。
+- 新增 V3 派生脚本与 action contract；保持 V2 exact-dedup 时间线和 train/val split 不变，并拒绝非有限值或整行全零的手部 target。
+- `103b33f` 将 action 语义贯穿 Dataset、normalizer、训练、resume、checkpoint、bundle 与 rollout，防止 V2/V3 静默混用。
+- `7238912` 新增 V3 RGB+proprio 与纯 RGB 两份 100-epoch scratch 配置；完整测试 `40 passed`，本地 `main` 与 `origin/main` 已对齐。
+
+## 2026-08-14｜纯 RGB conditioning 成为可配置输入消融
+
+- `bd8ffa0` 增加 `model.use_proprio` 开关；关闭时不创建 proprio projection，也不把实际 joint state 加入 condition tokens，但 action 输出仍保持 16×13。
+- RGB-only 与 RGB+proprio 共用相机、数据、action 语义、网络主体、step budget、验证 seed 与 bundle 合同，便于只比较 proprio 输入带来的影响。
+- `bf4599a` 将该变更合入 `main`。
+
+## 2026-08-11｜保留 episode 尾部 lift 窗口并屏蔽 padding loss
+
+- `906a4e5` 增加 `include_tail_padded_windows`：保留每个 episode 最后 `action_horizon-1` 个不足长窗口，不再因未来动作不足16步而丢弃最终 lift 阶段。
+- 不足位置重复最后一个真实 action 以形成固定 `[H,13]` 张量，同时输出 `[H] action_mask`；CFM、RS-IMLE、Diffusion 和 sample-action MSE 均只统计 mask 为1的真实 timestep。
+- 尾窗按真实 future phase 计算 `is_lift`，训练集支持 `lift_oversample_factor`；当前 V3 配置实际包含 14,715 个 train 尾窗和 1,635 个 val 尾窗。
+- checkpoint/resume provenance 记录 tail-window 契约，专项测试覆盖 padding 重复、mask 忽略和固定验证行为。
+
+## 2026-08-11｜Exact-dedup 数据与长预算训练资产
+
+- `d00eadc` 增加 exact 13D joint duplicate 审计与 `keep-last` 过滤链路，保留重复段最后一帧，避免丢失阶段边界和 episode 终点。
+- 新增 V2 tail/lift masked、50/100 epochs、continuation 与 stage-2 配置，以及 action continuity/stationary-frame 审计脚本。
+- bundle 增加与 exact-dedup 数据版本对应的部署字段；数据和训练产物仍留在外部存储，不进入 Git。
+
 ## 2026-07-22｜1,090-episode ViT 0.1× Level 0 测试包落地
 
 - 从 A800 的 best epoch 4 / step 25,445 导出 bundle v2，固定 `offset=1`、双 RGB
