@@ -1,119 +1,120 @@
 # Flow Matching Test
 
-面向 A2D 机器人抓取数据的连续动作策略训练与部署仓库。当前已验证主线是双 RGB（可选 proprio）条件的 Flow Matching；RS-IMLE 与 Diffusion Policy 保留为对比实现。
+基于 A2D 机器人抓取数据训练连续关节动作策略。当前主线是双 RGB、可选 proprio 条件的 Flow Matching，输出未来 16 步绝对 joint action。
 
-## 当前主线
+## 数据
+
+当前使用 `a2d-450GB` 的 1,090 个成功 episodes：
 
 ```text
-processed HDF5
-  -> A2DProcessedWindowDataset
-  -> RGB / proprio condition tokens
-  -> Flow Matching action policy
-  -> 16 × 13 absolute-joint action chunk
-  -> checkpoint / verified rollout bundle
+原始帧数             180,087
+V3 exact-dedup 后    179,160
+train / val          981 / 109 episodes
+基础训练窗口          160,206
+有效训练样本          220,026
+验证样本              17,864
 ```
 
-当前 V3 数据契约：
+V3 数据语义：
 
 ```text
 observation/qpos = arm2_pos(7) + hand2_pos(6)
-                  实际手臂状态 + 实际手部状态
+                  实际手臂 joint + 实际手部 joint
 
-action           = arm2_pos(7) + hand2_pos_target(6)
+action label     = arm2_pos(7) + hand2_pos_target(6)
                   实际手臂轨迹 + 手部 commanded target
 ```
 
-V3 的目的不是把 target 当作 observation，而是把稳定的手部控制意图作为未来 action GT，避免模型模仿接触、回弹和跟踪误差造成的实际手指抖动。action 语义会写入 dataset、normalizer、checkpoint、bundle 与 rollout contract，混用旧语义时直接报错。
+V2 的手部标签使用实际 `hand2_pos`，包含接触、回弹和跟踪误差。V3 改为学习 `hand2_pos_target`，让模型学习稳定的手部控制意图；observation 仍使用机器人当前的实际 joint state。
 
-## 时间窗口与尾部标签
+## 输入与输出
 
-默认配置：
+当前有两组受控实验：
+
+| 实验 | 输入 | 输出 |
+|---|---|---|
+| RGB+proprio | `rgb_head`、`rgb_right_hand`、当前 13 维实际 qpos | `[16,13]` action chunk |
+| RGB-only | `rgb_head`、`rgb_right_hand` | `[16,13]` action chunk |
+
+时间对齐：
 
 ```text
-history_steps       = 1
-action_offset_steps = 1
-action_horizon      = 16
-```
-
-所以训练对齐为：
-
-```text
-obs[t] -> action[t+1 : t+17]
+obs[t]   -> action[t+1 : t+17]
 obs[t+1] -> action[t+2 : t+18]
 ```
 
-窗口以 stride 1 逐帧滑动。episode 尾部不足 16 步时重复最后一个真实 action 以保持固定形状，同时返回 `action_mask`；padding 位置不参与 loss。`include_tail_padded_windows: true` 会保留每个 episode 最后 15 个窗口，其中包含 lift 的窗口还会设置 `is_lift=true`，训练集可通过 `lift_oversample_factor` 增加曝光。
+窗口 stride 为 1，相邻训练样本共享 15 个未来 action。
 
-## 模型
+## 模型与策略
 
-Observation condition：
+- 视觉 encoder：ImageNet 预训练 `vit_small_r26_s32_224`；
+- 两路相机共用 ViT，每路保留 49 个 spatial tokens；
+- proprio 版本将归一化 13 维 qpos 投影为一个 384 维 token；
+- action model：4 层 Transformer，`d_model=384`、`n_head=4`；
+- policy：Conditional Flow Matching；训练预测 velocity，推理使用 5 步 Euler 积分；
+- ViT 全量可训练，backbone LR 是 action head LR 的 `0.1×`；
+- EMA 权重用于独立 checkpoint 选择与 rollout 对比。
 
-- 每路 RGB 经共享 CNN 或 timm/ViT encoder 产生视觉 tokens；
-- RGB+proprio 模型将归一化 13 维实际 qpos 投影为一个 proprio token；
-- 纯 RGB 模型设置 `model.use_proprio: false`。
+仓库同时保留 RS-IMLE 和 Diffusion Policy 实现，但当前抓取主线使用 Flow Matching。不同 policy 的 loss 数值不能直接比较，最终以同协议 rollout 为准。
 
-Flow Matching 训练：
+## 训练预算
+
+RGB+proprio 与 RGB-only 使用相同数据和预算，只改变 `use_proprio`：
 
 ```text
-clean action A, noise Z, flow time τ
-Xτ = (1-τ)Z + τA
-target velocity = A - Z
-
-noisy action tokens --self-attention--+
-                                      +--> velocity head --> masked MSE
-observation tokens ----cross-attention+
+batch size             32
+steps / epoch          6,876
+epochs                 100
+total steps            687,600
+warmup steps           34,380（前5轮）
+head peak LR           1e-4
+ViT peak LR            1e-5
+schedule               linear warmup + cosine decay
+seed                   42
 ```
 
-推理从随机 action noise 开始，按配置的 CFM steps 积分得到未来 action chunk。
+Sampling：
 
-## Policy
-
-配置通过 `policy.type` 选择：
-
-```yaml
-policy:
-  type: flow_matching  # flow_matching | imle | diffusion
+```text
+transition windows     16,520，train 2×
+lift windows           43,300，train 2×
+tail padded windows    train 14,715 / val 1,635
 ```
 
-三种 policy 的训练目标与数值空间不同，loss 不可直接横向排名。正式比较必须固定数据、split、网络、step budget 与 seed，并使用 rollout 成功率、action MSE 和推理延迟。
+训练集启用图像 augmentation；验证集不增强、不 oversample，并使用固定 seed。每轮记录 train/val、continuous/keyframe/lift loss、sample action MSE、EMA 指标、梯度和学习率。
 
-## 快速开始
+## 已完成的关键改动
 
-环境检查：
+1. `action_offset_steps=1`：当前 observation 预测下一帧开始的 16 步动作；
+2. exact-dedup keep-last：删除完全重复的 joint frame，同时保留重复段最后一帧；
+3. tail padding + `action_mask`：保留 episode 最后 15 个窗口，padding 不参与 loss，避免丢失最终 lift；
+4. lift/transition oversampling：增加关键动作在训练中的曝光；
+5. V3 hybrid action：arm 学习实际平滑轨迹，hand 学习 commanded target；
+6. action contract：dataset、stats、checkpoint、bundle、rollout 均校验 V2/V3 语义；
+7. `use_proprio` 开关：在完全相同预算下比较 RGB+proprio 与纯 RGB；
+8. deterministic validation、EMA、watchdog 和原子 checkpoint 保存。
 
-```bash
-python3 -m flow_matching_test.check_timm_env \
-  --model-name vit_small_r26_s32_224 \
-  --pretrained
-```
+详细历史见 [`CHANGE.md`](CHANGE.md)。
 
-CPU smoke test：
+## 训练
 
-```bash
-python3 -m flow_matching_test.train \
-  --config configs/cpu_smoke.yaml \
-  data.data_dir=/path/to/processed_dataset \
-  training.output_dir=/tmp/a2d_cpu_smoke
-```
-
-V3 RGB+proprio 100 epochs：
+RGB+proprio：
 
 ```bash
 python3 -u -m flow_matching_test.train \
   --config configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_100ep_scratch.yaml
 ```
 
-V3 纯 RGB 100 epochs：
+纯 RGB：
 
 ```bash
 python3 -u -m flow_matching_test.train \
   --config configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_rgb_only_100ep_scratch.yaml
 ```
 
-训练目录包含：
+重要产物：
 
 ```text
-config_resolved.yaml
 metrics.jsonl
 latest.ckpt
 best_val_loss.ckpt
@@ -122,56 +123,14 @@ best_ema_action_mse.ckpt
 summary.json
 ```
 
-实时查看每轮指标：
+部署时优先测试 action-MSE checkpoint，不默认最后一轮最好。部署 bundle 会记录 action 语义、raw/EMA 权重、epoch/step、数据版本及 SHA256；bundle 不包含 optimizer，不能用于完整 resume。
 
-```bash
-tail -F /path/to/run/metrics.jsonl
-```
+## 文档
 
-## 导出部署 bundle
+- [`CHANGE.md`](CHANGE.md)：倒序更新记录；
+- [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：数据、padding、mask 与 oversampling；
+- [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR；
+- [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练与停止判断；
+- [`artifacts_index.md`](artifacts_index.md)：外部训练和部署产物索引。
 
-优先按 rollout 目标选择 action-MSE checkpoint，不要默认最后一轮最好：
-
-```bash
-python3 -m flow_matching_test.export_bundle \
-  --ckpt /path/to/best_ema_action_mse.ckpt \
-  --out /path/to/eval_bundle \
-  --weights-variant ema \
-  --execute-horizon 16 \
-  --data-version DATA_VERSION \
-  --archive
-```
-
-Bundle manifest 会记录 action 语义、raw/EMA 权重、checkpoint 选择标准、训练 epoch/step、数据版本和内部文件 SHA256。部署 bundle 不是可恢复训练的完整 checkpoint。
-
-## 验证
-
-```bash
-python3 -m pytest -q
-git diff --check
-```
-
-数据更新时至少核对：
-
-- episode、split 与 manifest SHA；
-- action 语义和 13 维 layout；
-- base/effective samples、tail/lift/transition windows；
-- steps/epoch、total steps 与 warmup；
-- checkpoint 与 bundle provenance。
-
-## 文档与入口
-
-- [`CHANGE.md`](CHANGE.md)：按时间倒序记录重要更新；
-- [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：数据、split、padding、oversampling 与标签契约；
-- [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR schedule；
-- [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练技巧与停止/续训判断；
-- [`docs/POLICY_COMPARISON_PROTOCOL.md`](docs/POLICY_COMPARISON_PROTOCOL.md)：多 policy 公平对比；
-- [`artifacts_index.md`](artifacts_index.md)：外部模型和评测产物索引；
-- [`train+deploy/handoff_runbook.md`](train+deploy/handoff_runbook.md)：部署交付流程；
-- `flow_matching_test/a2d_dataset.py`：训练 Dataset；
-- `flow_matching_test/policies/`：policy 接口与实现；
-- `flow_matching_test/train.py`：训练、验证、EMA 与 checkpoint；
-- `flow_matching_test/export_bundle.py`：自包含部署包；
-- `rollout/`：Isaac Sim rollout 与结果汇总。
-
-训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git；只在 `artifacts_index.md` 中登记位置、SHA256、数据版本与 Git commit。
+训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git。
