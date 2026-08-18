@@ -21,6 +21,7 @@ from flow_matching_test.a2d_dataset import (
     train_episode_binding,
     validate_stats_binding,
 )
+from flow_matching_test.action_contract import HYBRID_ACTION_SEMANTICS
 from flow_matching_test.segmentation import compute_executed_action_segments
 from scripts.ingest_a2d import admission_reason
 
@@ -248,6 +249,11 @@ class DataContractTest(unittest.TestCase):
             "action_semantics": "executed_joint_position",
         }
         validate_stats_binding(stats, episodes)
+        hybrid_stats = copy.deepcopy(stats)
+        hybrid_stats["action_semantics"] = HYBRID_ACTION_SEMANTICS
+        validate_stats_binding(hybrid_stats, episodes, HYBRID_ACTION_SEMANTICS)
+        with self.assertRaisesRegex(ValueError, "semantics"):
+            validate_stats_binding(hybrid_stats, episodes)
         with self.assertRaises(ValueError):
             validate_stats_binding(copy.deepcopy(stats), episodes[:1])
 

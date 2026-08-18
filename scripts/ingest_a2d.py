@@ -8,6 +8,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from flow_matching_test.action_contract import (
+    ACTION_LAYOUTS,
+    EXECUTED_ACTION_SEMANTICS,
+)
+
 
 def admission_reason(report: dict, admission: str) -> str | None:
     if report.get("errors") or not report.get("structural_alignment"):
@@ -48,6 +55,11 @@ def main() -> None:
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--dataset-version", required=True)
     parser.add_argument("--admission", choices=("structural", "complete-lift"), default="complete-lift")
+    parser.add_argument(
+        "--action-semantics",
+        choices=sorted(ACTION_LAYOUTS),
+        default=EXECUTED_ACTION_SEMANTICS,
+    )
     parser.add_argument("--image-keys", nargs="+", default=["rgb_head", "rgb_right_hand"])
     parser.add_argument("--image-size", type=int, default=224)
     parser.add_argument("--jpeg-quality", type=int, default=92)
@@ -72,6 +84,7 @@ def main() -> None:
     ]
     ingest_contract = {
         "admission": args.admission,
+        "action_semantics": args.action_semantics,
         "image_keys": args.image_keys,
         "image_size": args.image_size,
         "jpeg_quality": args.jpeg_quality,
@@ -89,7 +102,11 @@ def main() -> None:
                 f"dataset version {args.dataset_version!r} already binds a different source inventory; "
                 "choose a new --dataset-version"
             )
-        if existing.get("ingest_contract") != ingest_contract:
+        existing_contract = dict(existing.get("ingest_contract", {}))
+        # Manifests produced before action semantics became configurable used
+        # the executed-joint contract implicitly.
+        existing_contract.setdefault("action_semantics", EXECUTED_ACTION_SEMANTICS)
+        if existing_contract != ingest_contract:
             raise ValueError(
                 f"dataset version {args.dataset_version!r} already binds different ingest parameters; "
                 "choose a new --dataset-version"
@@ -135,6 +152,7 @@ def main() -> None:
         "--workers", str(args.workers),
         "--motion-threshold", str(args.motion_threshold),
         "--keyframe-threshold", str(args.keyframe_threshold),
+        "--action-semantics", args.action_semantics,
     ], cwd=repo)
     run([
         sys.executable,
@@ -142,6 +160,7 @@ def main() -> None:
         "--data-dir", str(dataset_dir),
         "--image-keys", *args.image_keys,
         "--compute-stats",
+        "--action-semantics", args.action_semantics,
         "--norm-stats", args.norm_stats,
         "--seed", str(args.seed),
         "--val-ratio", str(args.val_ratio),

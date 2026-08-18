@@ -27,14 +27,16 @@
 | `trajectory/arm2_pos` | (T, 7) | 手臂关节实测值 | → state + action |
 | `trajectory/hand2_pos` | (T, 6) | 手部关节实测值 | → state + action |
 | `trajectory/arm2_pos_target` | (T, 7) | 稀疏手臂指令记录 | 仅审计 |
-| `trajectory/hand2_pos_target` | (T, 6) | 手部指令记录 | 仅审计 |
+| `trajectory/hand2_pos_target` | (T, 6) | 密集手部控制目标 | v3 action 后 6 维 |
 | `trajectory/waist_pos` | (T, 2) | 腰部关节 | 待定,见 §6 |
 | `trajectory/cameras/rgb_{head,left_hand,right_hand}` | (T, 480, 640, 3) uint8 | 三路可用 RGB | 通过 `--image-keys` 选择观测子集 |
 | `trajectory/cameras/depth_*` | (T, 480, 640) f32 | 深度 | 当前管线不用,见 §7 |
 | `trajectory/phase` | (T,) str | 22 种阶段标签 | 保留,用于分析/加权 |
 | `meta/success`, `grasp/quality_score` 等 | attrs | 质量元数据 | 保留在输出 attrs |
 
-**决策依据**:`arm2_pos_target` 仅 8/133 帧有效，而 `*_pos` 133/133 帧完整，因此 policy 学习成功 episode 的实际执行关节轨迹。
+**决策依据**:`arm2_pos_target` 是稀疏事件记录，不能直接作为逐帧标签；
+`hand2_pos_target` 在当前 1,090 条数据的 180,087 帧中没有全零占位行。
+legacy v1/v2 学习完整实际执行轨迹，v3 改为前 7 维实际手臂轨迹加后 6 维密集手部控制目标。
 
 ---
 
@@ -160,6 +162,34 @@ python scripts/filter_exact_duplicate_joint_frames.py \
 `lift`）。图像、qpos、action 和 phase 使用同一个 frame mask，随后重新计算
 segmentation、train-only normalization、dataset manifest 和 split manifest。
 `L2 <= 1e-4` 的近似不变帧不在此过滤范围内。
+
+### v3 手部控制目标语义
+
+v2 的 `action` 与 `observations/qpos` 都是
+`arm2_pos(7)+hand2_pos(6)`。部署却把 policy 后 6 维输出作为手部控制目标，
+导致模型把接触、负载和跟踪滞后造成的实际手指变化重新发给控制器。v3 改为：
+
+```text
+observation/qpos = arm2_pos(7) + hand2_pos(6)
+action           = arm2_pos(7) + hand2_pos_target(6)
+action_semantics = arm_executed_hand_commanded_joint_position
+```
+
+从现有 exact-dedup v2 派生 v3 时复用已经压缩的 RGB，只从原始 HDF5 读取
+`hand2_pos_target`，并严格验证 v2 qpos 与原始数据按 executed-qpos keep-last mask
+得到的时间线一致：
+
+```bash
+python scripts/create_hybrid_hand_target_dataset.py \
+  --source data-rgb-450gb-v2-exact-dedup-keep-last \
+  --raw-root a2d-450GB \
+  --destination data-rgb-450gb-v3-arm-executed-hand-commanded-keep-last \
+  --data-version a2d_450gb_rgb_v3_arm_executed_hand_commanded_keep_last
+```
+
+新版本继承原 split 的完整 episode 成员，重新计算 action normalization、内容哈希和
+manifest。精确去重和 segmentation 始终基于实际 `observations/qpos`，不基于 hybrid
+action。v2 checkpoint 不得 resume 到 v3，v3 必须从头训练。
 
 ### episode 尾部 lift window
 

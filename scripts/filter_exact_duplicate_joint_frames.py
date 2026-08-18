@@ -28,6 +28,7 @@ from flow_matching_test.a2d_dataset import (
     build_index,
     compute_norm_stats,
 )
+from flow_matching_test.action_contract import EXECUTED_ACTION_SEMANTICS
 from flow_matching_test.segmentation import (
     SEGMENTATION_VERSION,
     compute_executed_action_segments,
@@ -96,16 +97,15 @@ def filter_episode(
     with h5py.File(source_path, "r") as source:
         action = np.asarray(source["action"][:], dtype=np.float32)
         qpos = np.asarray(source["observations/qpos"][:], dtype=np.float32)
-        if not np.array_equal(action, qpos):
-            raise ValueError(f"{source_path}: action and qpos are not exactly equal")
-        keep, duplicate_edges = exact_keep_last_mask(action)
+        keep, duplicate_edges = exact_keep_last_mask(qpos)
         indices = np.flatnonzero(keep)
         removed_indices = np.flatnonzero(~keep)
         filtered_action = action[indices]
+        filtered_qpos = qpos[indices]
         motion_threshold = float(source.attrs["segmentation_motion_threshold"])
         keyframe_threshold = float(source.attrs["segmentation_keyframe_threshold"])
         segment_type, arm_keyframe = compute_executed_action_segments(
-            filtered_action,
+            filtered_qpos,
             motion_threshold=motion_threshold,
             keyframe_threshold=keyframe_threshold,
         )
@@ -126,6 +126,7 @@ def filter_episode(
             )
             destination.attrs["exact_duplicate_filter_version"] = FILTER_VERSION
             destination.attrs["exact_duplicate_filter_policy"] = FILTER_POLICY
+            destination.attrs["exact_duplicate_filter_source"] = "observations/qpos"
             destination.attrs["exact_duplicate_frames_removed"] = int(
                 len(removed_indices)
             )
@@ -133,7 +134,7 @@ def filter_episode(
 
             observations = destination.create_group("observations")
             copy_attrs(source["observations"].attrs, observations.attrs)
-            observations.create_dataset("qpos", data=qpos[indices])
+            observations.create_dataset("qpos", data=filtered_qpos)
             copy_attrs(
                 source["observations/qpos"].attrs,
                 observations["qpos"].attrs,
@@ -193,20 +194,24 @@ def inspect_filtered_episode(
 ) -> list[dict[str, Any]]:
     with h5py.File(source_path, "r") as source:
         action = np.asarray(source["action"][:], dtype=np.float32)
+        qpos = np.asarray(source["observations/qpos"][:], dtype=np.float32)
         phases = [
             value.decode() if isinstance(value, bytes) else str(value)
             for value in source["phase"][:]
         ]
-    keep, duplicate_edges = exact_keep_last_mask(action)
+    keep, duplicate_edges = exact_keep_last_mask(qpos)
     indices = np.flatnonzero(keep)
     removed_indices = np.flatnonzero(~keep)
     with h5py.File(destination_path, "r") as destination:
         filtered_action = np.asarray(destination["action"][:], dtype=np.float32)
+        filtered_qpos = np.asarray(destination["observations/qpos"][:], dtype=np.float32)
         if str(destination.attrs.get("exact_duplicate_filter_policy", "")) != FILTER_POLICY:
             raise ValueError(f"{destination_path}: filter policy mismatch")
         if not np.array_equal(filtered_action, action[indices]):
             raise ValueError(f"{destination_path}: filtered action does not match source")
-        if np.any(np.all(filtered_action[:-1] == filtered_action[1:], axis=1)):
+        if not np.array_equal(filtered_qpos, qpos[indices]):
+            raise ValueError(f"{destination_path}: filtered qpos does not match source")
+        if np.any(np.all(filtered_qpos[:-1] == filtered_qpos[1:], axis=1)):
             raise ValueError(f"{destination_path}: exact duplicate remains")
 
     old_to_new = np.full(len(action), -1, dtype=np.int64)
@@ -232,6 +237,7 @@ def create_manifests_and_stats(
     data_version: str,
     image_keys: tuple[str, ...],
     source_split: dict[str, Any],
+    action_semantics: str = EXECUTED_ACTION_SEMANTICS,
 ) -> dict[str, Any]:
     cfg = A2DConfig(
         data_dir=str(data_dir),
@@ -239,6 +245,7 @@ def create_manifests_and_stats(
         seed=int(source_split["seed"]),
         val_ratio=float(source_split["val_ratio"]),
         norm_stats="norm_stats.json",
+        action_semantics=action_semantics,
     )
     episodes = build_index(cfg, force=True)
     episodes_by_name = {str(item["file_name"]): item for item in episodes}
@@ -323,6 +330,10 @@ def main() -> None:
     if source_split["dataset_manifest_sha256"] != source_manifest_sha256:
         raise ValueError("source split manifest is not bound to the source dataset")
     source_files = [str(item["file_name"]) for item in source_manifest["episodes"]]
+    with h5py.File(source_dir / source_files[0], "r") as first_source:
+        source_action_semantics = str(
+            first_source.attrs.get("action_semantics", EXECUTED_ACTION_SEMANTICS)
+        )
     split_by_name = {
         **{str(name): "train" for name in source_split["train_episodes"]},
         **{str(name): "val" for name in source_split["val_episodes"]},
@@ -360,6 +371,7 @@ def main() -> None:
         data_version=args.data_version,
         image_keys=tuple(str(value) for value in source_manifest["image_keys"]),
         source_split=source_split,
+        action_semantics=source_action_semantics,
     )
     removed_path = building_dir / "removed_exact_duplicate_frames.csv"
     with removed_path.open("w", encoding="utf-8", newline="") as handle:

@@ -36,6 +36,11 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from flow_matching_test.action_contract import (
+    EXECUTED_ACTION_SEMANTICS,
+    action_layout,
+    validate_action_semantics,
+)
 from flow_matching_test.segmentation import (
     DEFAULT_KEYFRAME_THRESHOLD,
     DEFAULT_MOTION_THRESHOLD,
@@ -53,7 +58,7 @@ except Exception:
 STATE_DIM = 13
 ACTION_DIM = 13
 STATE_LAYOUT = "arm2_pos(7)+hand2_pos(6)"
-ACTION_LAYOUT = "arm2_pos(7)+hand2_pos(6)"
+ACTION_LAYOUT = action_layout(EXECUTED_ACTION_SEMANTICS)
 STATS_SCHEMA_VERSION = 2
 
 
@@ -67,6 +72,7 @@ class A2DConfig:
     obs_group: str = "observations"         # h5 group holding qpos + images
     state_key: str = "qpos"
     action_key: str = "action"              # at file root; use "observations/action" style if nested
+    action_semantics: str = EXECUTED_ACTION_SEMANTICS
     image_size: int = 224
     history_steps: int = 1
     action_horizon: int = 16
@@ -104,6 +110,8 @@ class A2DConfig:
 # --------------------------------------------------------------------------- #
 def build_index(cfg: A2DConfig, force: bool = False) -> list[dict]:
     data_dir = Path(cfg.data_dir)
+    expected_action_semantics = validate_action_semantics(cfg.action_semantics)
+    expected_action_layout = action_layout(expected_action_semantics)
     cache_path = data_dir / cfg.index_cache
     files = sorted(data_dir.glob("*.hdf5")) + sorted(data_dir.glob("*.h5"))
     if not files:
@@ -117,8 +125,9 @@ def build_index(cfg: A2DConfig, force: bool = False) -> list[dict]:
             cached = json.load(f)
         if (
             isinstance(cached, dict)
-            and cached.get("version") == 4
+            and cached.get("version") == 5
             and cached.get("image_keys") == list(cfg.image_keys)
+            and cached.get("action_semantics") == expected_action_semantics
             and cached.get("file_inventory") == inventory
             and cached.get("segmentation_version") == SEGMENTATION_VERSION
             and np.isclose(cached.get("motion_threshold", np.nan), cfg.motion_threshold)
@@ -148,10 +157,12 @@ def build_index(cfg: A2DConfig, force: bool = False) -> list[dict]:
                 raise ValueError(f"{p}: state/action length mismatch {state.shape[0]} != {T}")
             if str(f.attrs.get("qpos_layout", "")) != STATE_LAYOUT:
                 raise ValueError(f"{p}: qpos_layout must be {STATE_LAYOUT!r}")
-            if str(f.attrs.get("action_layout", "")) != ACTION_LAYOUT:
-                raise ValueError(f"{p}: action_layout must be {ACTION_LAYOUT!r}")
-            if str(f.attrs.get("action_semantics", "")) != "executed_joint_position":
-                raise ValueError(f"{p}: action_semantics must be 'executed_joint_position'")
+            if str(f.attrs.get("action_layout", "")) != expected_action_layout:
+                raise ValueError(f"{p}: action_layout must be {expected_action_layout!r}")
+            if str(f.attrs.get("action_semantics", "")) != expected_action_semantics:
+                raise ValueError(
+                    f"{p}: action_semantics must be {expected_action_semantics!r}"
+                )
             if int(f.attrs.get("segmentation_version", -1)) != SEGMENTATION_VERSION:
                 raise ValueError(
                     f"{p}: segmentation_version must be {SEGMENTATION_VERSION}; reprocess the episode"
@@ -201,8 +212,9 @@ def build_index(cfg: A2DConfig, force: bool = False) -> list[dict]:
     with open(cache_path, "w") as f:
         json.dump(
             {
-                "version": 4,
+                "version": 5,
                 "image_keys": list(cfg.image_keys),
+                "action_semantics": expected_action_semantics,
                 "file_inventory": inventory,
                 "segmentation_version": SEGMENTATION_VERSION,
                 "motion_threshold": float(cfg.motion_threshold),
@@ -295,7 +307,11 @@ def train_episode_binding(episodes: list[dict]) -> tuple[list[str], str]:
     return hashes, digest
 
 
-def validate_stats_binding(stats: dict, train_episodes: list[dict]) -> None:
+def validate_stats_binding(
+    stats: dict,
+    train_episodes: list[dict],
+    expected_action_semantics: str = EXECUTED_ACTION_SEMANTICS,
+) -> None:
     hashes, digest = train_episode_binding(train_episodes)
     if stats.get("schema_version") != STATS_SCHEMA_VERSION:
         raise ValueError(
@@ -306,7 +322,7 @@ def validate_stats_binding(stats: dict, train_episodes: list[dict]) -> None:
             "norm stats do not match the current train episode split; "
             "create a new dataset version and recompute stats"
         )
-    if stats.get("action_semantics") != "executed_joint_position":
+    if stats.get("action_semantics") != validate_action_semantics(expected_action_semantics):
         raise ValueError("norm stats action semantics do not match the dataset contract")
 
 
@@ -350,7 +366,7 @@ def compute_norm_stats(cfg: A2DConfig, episodes: list[dict],
         "train_episode_digest": train_digest,
         "train_episode_count": len(train_hashes),
         "split_metadata": {"seed": int(cfg.seed), "val_ratio": float(cfg.val_ratio)},
-        "action_semantics": "executed_joint_position",
+        "action_semantics": validate_action_semantics(cfg.action_semantics),
         "normalization": "train_minmax",
         "range_eps": float(cfg.range_eps),
         "state": minmax(states),
@@ -380,7 +396,7 @@ def compute_norm_stats(cfg: A2DConfig, episodes: list[dict],
 def load_norm_stats(cfg: A2DConfig, train_episodes: list[dict]) -> dict:
     with open(Path(cfg.data_dir) / cfg.norm_stats) as f:
         stats = json.load(f)
-    validate_stats_binding(stats, train_episodes)
+    validate_stats_binding(stats, train_episodes, cfg.action_semantics)
     if not np.isclose(stats.get("range_eps", np.nan), cfg.range_eps):
         raise ValueError("norm stats range_eps does not match the data config")
     for field in ("state", "action"):
@@ -579,8 +595,8 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
             stats[field]["span"] = np.maximum(
                 np.asarray(stats[field]["span"], dtype=np.float32), cfg.range_eps
             ).tolist()
-        if stats.get("action_semantics") != "executed_joint_position":
-            raise ValueError("norm_stats.json must use executed_joint_position semantics")
+        if stats.get("action_semantics") != validate_action_semantics(cfg.action_semantics):
+            raise ValueError("norm_stats.json action semantics do not match data config")
         selected = train_eps if split == "train" else val_eps
         super().__init__(cfg, selected, stats, train=split == "train")
         self.split_manifest = split_manifest
@@ -727,6 +743,7 @@ if __name__ == "__main__":
     ap.add_argument("--compute-stats", action="store_true")
     ap.add_argument("--rebuild-index", action="store_true")
     ap.add_argument("--action-key", default="action")
+    ap.add_argument("--action-semantics", default=EXECUTED_ACTION_SEMANTICS)
     ap.add_argument("--state-key", default="qpos")
     ap.add_argument("--obs-group", default="observations")
     ap.add_argument(
@@ -743,6 +760,7 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     cfg = A2DConfig(data_dir=args.data_dir, action_key=args.action_key,
+                    action_semantics=args.action_semantics,
                     state_key=args.state_key, obs_group=args.obs_group,
                     image_keys=tuple(args.image_keys),
                     allow_duplicate_episodes=args.allow_duplicates,

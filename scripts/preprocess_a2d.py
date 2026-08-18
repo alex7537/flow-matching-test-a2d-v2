@@ -41,6 +41,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from flow_matching_test.action_contract import (
+    ACTION_LAYOUTS,
+    EXECUTED_ACTION_SEMANTICS,
+    HYBRID_ACTION_SEMANTICS,
+    action_layout,
+    validate_action_semantics,
+)
 from flow_matching_test.segmentation import (
     DEFAULT_KEYFRAME_THRESHOLD,
     DEFAULT_MOTION_THRESHOLD,
@@ -66,8 +73,10 @@ def encode_frames(frames: np.ndarray, size: int, quality: int) -> list[np.ndarra
 
 def process_episode(src_path: str, dst_dir: str, size: int, quality: int,
                     include_waist: bool, image_keys: tuple[str, ...],
-                    motion_threshold: float, keyframe_threshold: float) -> str:
+                    motion_threshold: float, keyframe_threshold: float,
+                    action_semantics: str = EXECUTED_ACTION_SEMANTICS) -> str:
     src_path, dst_dir = Path(src_path), Path(dst_dir)
+    action_semantics = validate_action_semantics(action_semantics)
     dst_path = dst_dir / src_path.name
     if dst_path.exists():
         with h5py.File(dst_path, "r") as existing:
@@ -85,7 +94,7 @@ def process_episode(src_path: str, dst_dir: str, size: int, quality: int,
                 f"existing output {dst_path} uses image_keys={stored}, "
                 f"requested {image_keys}; use a different --dst or remove it"
             )
-        if stored_action_semantics != "executed_joint_position":
+        if stored_action_semantics != action_semantics:
             raise ValueError(
                 f"existing output {dst_path} uses action_semantics={stored_action_semantics!r}; "
                 "use a different --dst or remove it"
@@ -108,6 +117,11 @@ def process_episode(src_path: str, dst_dir: str, size: int, quality: int,
         traj = f["trajectory"]
         arm_pos = traj["arm2_pos"][:].astype(np.float32)
         hand_pos = traj["hand2_pos"][:].astype(np.float32)
+        hand_target = (
+            traj["hand2_pos_target"][:].astype(np.float32)
+            if action_semantics == HYBRID_ACTION_SEMANTICS
+            else None
+        )
         phase = [p.decode() if isinstance(p, bytes) else str(p)
                  for p in traj["phase"][:]]
         T = arm_pos.shape[0]
@@ -119,16 +133,27 @@ def process_episode(src_path: str, dst_dir: str, size: int, quality: int,
             "arm2_pos": arm_pos,
             "hand2_pos": hand_pos,
         }
+        if hand_target is not None:
+            expected_shapes["hand2_pos_target"] = (T, 6)
+            arrays["hand2_pos_target"] = hand_target
         for key, expected in expected_shapes.items():
             if arrays[key].shape != expected:
                 raise ValueError(f"{src_path.name}: {key} must have shape {expected}, got {arrays[key].shape}")
+            if not np.isfinite(arrays[key]).all():
+                raise ValueError(f"{src_path.name}: {key} contains non-finite values")
+        if hand_target is not None and np.any(np.all(hand_target == 0.0, axis=1)):
+            raise ValueError(
+                f"{src_path.name}: hand2_pos_target contains an all-zero row; "
+                "refusing to treat a possible placeholder as a commanded target"
+            )
         qpos_parts = [arm_pos, hand_pos]
         if include_waist:
             qpos_parts.append(traj["waist_pos"][:].astype(np.float32))
         qpos = np.concatenate(qpos_parts, axis=1)
-        action = np.concatenate([arm_pos, hand_pos], axis=1)
+        action_hand = hand_target if hand_target is not None else hand_pos
+        action = np.concatenate([arm_pos, action_hand], axis=1)
         segment_type, arm_keyframe = compute_executed_action_segments(
-            action,
+            np.concatenate([arm_pos, hand_pos], axis=1),
             motion_threshold=motion_threshold,
             keyframe_threshold=keyframe_threshold,
         )
@@ -168,8 +193,8 @@ def process_episode(src_path: str, dst_dir: str, size: int, quality: int,
         g.attrs["image_keys"] = np.asarray(image_keys, dtype=h5py.string_dtype())
         g.attrs["qpos_layout"] = ("arm2_pos(7)+hand2_pos(6)"
                                   + ("+waist(2)" if include_waist else ""))
-        g.attrs["action_layout"] = "arm2_pos(7)+hand2_pos(6)"
-        g.attrs["action_semantics"] = "executed_joint_position"
+        g.attrs["action_layout"] = action_layout(action_semantics)
+        g.attrs["action_semantics"] = action_semantics
         g.attrs["segmentation_version"] = SEGMENTATION_VERSION
         g.attrs["segmentation_source"] = "executed_joint_position"
         g.attrs["segmentation_motion_threshold"] = motion_threshold
@@ -192,6 +217,11 @@ def main():
         help="RGB views to export; unselected views are not required or read",
     )
     ap.add_argument("--include-waist", action="store_true")
+    ap.add_argument(
+        "--action-semantics",
+        choices=sorted(ACTION_LAYOUTS),
+        default=EXECUTED_ACTION_SEMANTICS,
+    )
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--motion-threshold", type=float, default=DEFAULT_MOTION_THRESHOLD)
     ap.add_argument("--keyframe-threshold", type=float, default=DEFAULT_KEYFRAME_THRESHOLD)
@@ -208,13 +238,14 @@ def main():
             print(process_episode(str(p), str(dst), args.image_size,
                                   args.jpeg_quality, args.include_waist,
                                   image_keys, args.motion_threshold,
-                                  args.keyframe_threshold))
+                                  args.keyframe_threshold, args.action_semantics))
     else:
         with ProcessPoolExecutor(max_workers=args.workers) as ex:
             futs = {ex.submit(process_episode, str(p), str(dst),
                               args.image_size, args.jpeg_quality,
                               args.include_waist, image_keys,
-                              args.motion_threshold, args.keyframe_threshold): p for p in files}
+                              args.motion_threshold, args.keyframe_threshold,
+                              args.action_semantics): p for p in files}
             for fut in as_completed(futs):
                 print(fut.result())
 

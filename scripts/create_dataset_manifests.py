@@ -11,6 +11,10 @@ from flow_matching_test.a2d_dataset import (
     load_norm_stats,
     split_episodes,
 )
+from flow_matching_test.action_contract import (
+    ACTION_LAYOUTS,
+    EXECUTED_ACTION_SEMANTICS,
+)
 
 
 def _sha256(path: Path) -> str:
@@ -37,6 +41,11 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--norm-stats", default="norm_stats.json")
+    parser.add_argument(
+        "--action-semantics",
+        choices=sorted(ACTION_LAYOUTS),
+        default=EXECUTED_ACTION_SEMANTICS,
+    )
     args = parser.parse_args()
 
     data_dir = args.data_dir.resolve()
@@ -46,6 +55,7 @@ def main() -> None:
         seed=args.seed,
         val_ratio=args.val_ratio,
         norm_stats=args.norm_stats,
+        action_semantics=args.action_semantics,
     )
     episodes = build_index(cfg, force=True)
     train, val = split_episodes(episodes, cfg.val_ratio, cfg.seed)
