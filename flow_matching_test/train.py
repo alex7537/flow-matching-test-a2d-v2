@@ -24,6 +24,10 @@ import yaml
 from torch.utils.data import DataLoader
 
 from flow_matching_test.a2d_dataset import A2DConfig, A2DProcessedWindowDataset
+from flow_matching_test.action_contract import (
+    EXECUTED_ACTION_SEMANTICS,
+    action_components,
+)
 from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, _git_sha, export_eval_bundle
 from flow_matching_test.policies.base import ActionPolicy, masked_action_mse_per_sample
 from flow_matching_test.policies.factory import (
@@ -178,6 +182,9 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
     cfg = A2DConfig(
         data_dir=str(data_cfg["data_dir"]),
         image_keys=tuple(data_cfg.get("image_keys", ["rgb_head", "rgb_left_hand", "rgb_right_hand"])),
+        action_semantics=str(
+            data_cfg.get("action_semantics", EXECUTED_ACTION_SEMANTICS)
+        ),
         image_size=int(data_cfg.get("image_size", 224)),
         history_steps=int(data_cfg.get("history_steps", 1)),
         action_horizon=int(data_cfg.get("action_horizon", 16)),
@@ -634,6 +641,7 @@ def main() -> None:
     split_manifest = copy.deepcopy(train_dataset.split_manifest)
     data_provenance = {
         "stats_digest": train_dataset.stats["train_episode_digest"],
+        "action_semantics": train_dataset.cfg.action_semantics,
         "segmentation_version": SEGMENTATION_VERSION,
         "segmentation_motion_threshold": float(data_cfg.get("motion_threshold", 1.0e-4)),
         "segmentation_keyframe_threshold": float(data_cfg.get("transition_threshold", 0.1)),
@@ -757,7 +765,10 @@ def main() -> None:
             "model_schema": {
                 "obs_keys": list(data_cfg.get("image_keys", []))
                 + (["proprio"] if model_cfg.get("use_proprio", True) else []),
-                "action_keys": ["arm2_pos", "hand2_pos"],
+                "action_keys": [
+                    str(item["name"])
+                    for item in action_components(train_dataset.cfg.action_semantics)
+                ],
             },
             "model_spec": {
                 "policy_type": policy_type,
@@ -766,14 +777,11 @@ def main() -> None:
                 "action_horizon": train_dataset.action_horizon,
                 "action_offset_steps": train_dataset.cfg.action_offset_steps,
                 "uses_action_mask": train_dataset.cfg.include_tail_padded_windows,
-                "action_layout": [
-                    {"name": "arm2_pos", "dim": 7},
-                    {"name": "hand2_pos", "dim": 6},
-                ],
+                "action_layout": action_components(train_dataset.cfg.action_semantics),
             },
             "adapter_metadata": {
                 "dataset": "A2DProcessedWindowDataset",
-                "action_semantics": "executed_joint_position",
+                "action_semantics": train_dataset.cfg.action_semantics,
             },
             "inference_spec": {
                 "schema_version": 1,
@@ -799,6 +807,18 @@ def main() -> None:
                 f"current policy_type={policy_type!r}"
             )
         checkpoint_provenance = checkpoint.get("data_provenance", {})
+        checkpoint_action_semantics = str(
+            checkpoint_provenance.get(
+                "action_semantics",
+                checkpoint.get("config", {}).get("data", {}).get(
+                    "action_semantics", EXECUTED_ACTION_SEMANTICS
+                ),
+            )
+        )
+        if checkpoint_action_semantics != data_provenance["action_semantics"]:
+            raise ValueError(
+                "init checkpoint action_semantics does not match the current dataset"
+            )
         checkpoint_action_offset = int(
             checkpoint_provenance.get(
                 "action_offset_steps",
@@ -835,6 +855,18 @@ def main() -> None:
                 f"current policy_type={policy_type!r}"
             )
         checkpoint_provenance = checkpoint.get("data_provenance", {})
+        checkpoint_action_semantics = str(
+            checkpoint_provenance.get(
+                "action_semantics",
+                checkpoint.get("config", {}).get("data", {}).get(
+                    "action_semantics", EXECUTED_ACTION_SEMANTICS
+                ),
+            )
+        )
+        if checkpoint_action_semantics != data_provenance["action_semantics"]:
+            raise ValueError(
+                "resume checkpoint action_semantics does not match the current dataset"
+            )
         checkpoint_action_offset = int(
             checkpoint_provenance.get(
                 "action_offset_steps",
@@ -1240,6 +1272,7 @@ def main() -> None:
         "history_steps": train_dataset.history_steps,
         "action_horizon": train_dataset.action_horizon,
         "action_offset_steps": train_dataset.cfg.action_offset_steps,
+        "action_semantics": train_dataset.cfg.action_semantics,
         "include_tail_padded_windows": train_dataset.cfg.include_tail_padded_windows,
         "lift_oversample_factor": train_dataset.cfg.lift_oversample_factor,
         "policy_type": policy_type,

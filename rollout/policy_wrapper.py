@@ -14,6 +14,10 @@ import torch
 import torch.nn.functional as F
 import yaml
 
+from flow_matching_test.action_contract import (
+    EXECUTED_ACTION_SEMANTICS,
+    validate_action_semantics,
+)
 from flow_matching_test.policies.base import ActionPolicy
 from flow_matching_test.policies.factory import build_policy
 from flow_matching_test.policies.imle import ImlePolicy
@@ -87,8 +91,14 @@ class Policy:
             raise ValueError("unsupported config schema_version")
         if int(self.manifest.get("schema_version", -1)) != 2:
             raise ValueError("unsupported bundle manifest schema_version")
-        if self.stats.get("action_semantics") != "executed_joint_position":
-            raise ValueError("bundle action stats do not use executed_joint_position semantics")
+        stats_semantics = validate_action_semantics(
+            str(self.stats.get("action_semantics", EXECUTED_ACTION_SEMANTICS))
+        )
+        config_semantics = validate_action_semantics(
+            str(self.cfg["action"].get("target", EXECUTED_ACTION_SEMANTICS))
+        )
+        if stats_semantics != config_semantics:
+            raise ValueError("bundle action config and stats semantics differ")
         if int(self.cfg["action"]["dim"]) != 13:
             raise ValueError("this rollout harness requires a 13-dimensional action")
         if len(self.cfg["joint_order"]) != 13:

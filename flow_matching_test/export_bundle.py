@@ -13,6 +13,11 @@ from typing import Any
 import torch
 import yaml
 
+from flow_matching_test.action_contract import (
+    EXECUTED_ACTION_SEMANTICS,
+    action_components,
+    validate_action_semantics,
+)
 from flow_matching_test.policies.factory import materialize_policy_config
 
 
@@ -62,6 +67,14 @@ def _inference_config(
     use_proprio = bool(model_cfg.get("use_proprio", True))
     image_keys = list(data_cfg["image_keys"])
     bundle_cfg = train_cfg.get("deployment", {}).get("eval_bundle", {})
+    action_semantics = validate_action_semantics(
+        str(data_cfg.get("action_semantics", EXECUTED_ACTION_SEMANTICS))
+    )
+    normalizer_semantics = str(
+        checkpoint["normalizer"].get("action_semantics", EXECUTED_ACTION_SEMANTICS)
+    )
+    if normalizer_semantics != action_semantics:
+        raise ValueError("checkpoint config and normalizer action semantics differ")
     policy_cfg = copy.deepcopy(train_cfg.get("policy", {}))
     policy_type = str(
         checkpoint.get(
@@ -116,12 +129,9 @@ def _inference_config(
             # Missing means legacy checkpoints trained with action[t:t+H].
             "offset_steps": int(data_cfg.get("action_offset_steps", 0)),
             "execute_horizon": execute_horizon,
-            "target": "executed_joint_position",
+            "target": action_semantics,
             "range_guard_margin_ratio": float(bundle_cfg.get("action_range_guard_margin_ratio", 0.1)),
-            "layout": [
-                {"name": "arm2_pos", "dim": 7},
-                {"name": "hand2_pos", "dim": 6},
-            ],
+            "layout": action_components(action_semantics),
         },
         "obs": {
             "cameras": cameras,

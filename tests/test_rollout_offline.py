@@ -8,6 +8,7 @@ import torch
 import yaml
 
 from flow_matching_test.export_bundle import DEFAULT_JOINT_ORDER, _git_sha, export_eval_bundle
+from flow_matching_test.action_contract import HYBRID_ACTION_SEMANTICS
 from flow_matching_test.policies.factory import build_policy, resolve_policy_type
 from rollout.policy_wrapper import Policy
 from rollout.report import build_report
@@ -29,6 +30,7 @@ def _checkpoint(
     *,
     include_ema: bool = False,
     use_proprio: bool = True,
+    action_semantics: str = "executed_joint_position",
 ) -> None:
     policy_cfg = policy_cfg or {"type": "flow_matching"}
     config = {
@@ -37,6 +39,7 @@ def _checkpoint(
             "image_size": 32,
             "history_steps": 1,
             "action_horizon": 4,
+            "action_semantics": action_semantics,
         },
         "model": {
             "encoder_type": "cnn",
@@ -62,7 +65,7 @@ def _checkpoint(
     )
     stats = {
         "schema_version": 2,
-        "action_semantics": "executed_joint_position",
+        "action_semantics": action_semantics,
         "normalization": "train_minmax",
         "range_eps": 1.0e-4,
         "train_episode_digest": "fixture-stats-digest",
@@ -156,6 +159,20 @@ def test_bundle_can_override_cfm_inference_steps(tmp_path: Path) -> None:
     assert exported_config["model"]["cfm"]["num_inference_steps"] == 7
     policy = Policy(bundle, device="cpu")
     assert policy.model.num_inference_steps == 7
+
+
+def test_hybrid_hand_target_bundle_preserves_action_semantics(tmp_path: Path) -> None:
+    ckpt = tmp_path / "best.ckpt"
+    bundle = tmp_path / "bundle"
+    _checkpoint(ckpt, action_semantics=HYBRID_ACTION_SEMANTICS)
+
+    export_eval_bundle(ckpt, bundle, execute_horizon=2)
+
+    exported_config = yaml.safe_load((bundle / "config.yaml").read_text())
+    assert exported_config["action"]["target"] == HYBRID_ACTION_SEMANTICS
+    assert exported_config["action"]["layout"][1]["name"] == "hand2_pos_target"
+    policy = Policy(bundle, device="cpu")
+    assert policy.stats["action_semantics"] == HYBRID_ACTION_SEMANTICS
 
 
 def test_rgb_only_bundle_rollout_does_not_require_proprio(tmp_path: Path) -> None:
