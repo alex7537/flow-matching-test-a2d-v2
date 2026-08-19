@@ -2,6 +2,12 @@
 
 基于 A2D 机器人抓取数据训练连续关节动作策略。当前主线是双 RGB、可选 proprio 条件的 Flow Matching，输出未来 16 步绝对 joint action。
 
+## 成功抓取展示
+
+[![成功抓取拼接视频](docs/assets/grasp_success_montage.jpg)](docs/assets/grasp_success_montage.mp4)
+
+点击封面播放 2×2 拼接视频。同一测试条件为 episode `000002`、seed `44`、10cm；左上 H4 best EMA、右上 H8 latest raw、左下 H12 best EMA、右下 H16 best EMA。
+
 ## 数据
 
 当前使用 `a2d-450GB` 的 1,090 个成功 episodes：
