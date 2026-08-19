@@ -2,6 +2,12 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-08-19｜README 增加成功抓取拼接展示
+
+- `7abc36f` 将同一 episode/seed 下 H4、H8、H12、H16 的四段成功抓取视频压缩为 2×2 H.264 MP4，并生成静态封面；README 点击封面即可播放。
+- 展示文件为 `docs/assets/grasp_success_montage.mp4`（约 630KB）和 `.jpg`（约 72KB）；原始大视频仍保留在外部 Downloads，不进入 Git。
+- 本轮只做单个简单拼接，尚未按模型、checkpoint、execute horizon 或任务类型建立分类画廊。
+
 ## 2026-08-18｜V3 手部 commanded target 动作语义落地
 
 - `4782456` 将 V3 action 定义为 `arm2_pos(7) + hand2_pos_target(6)`；observation 仍使用实际 `arm2_pos(7) + hand2_pos(6)`，因此 target 是未来 action GT，不是 encoder 输入。
