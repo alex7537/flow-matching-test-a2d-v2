@@ -12,7 +12,8 @@ from flow_matching_test.action_contract import HYBRID_ACTION_SEMANTICS
 from flow_matching_test.policies.factory import build_policy, resolve_policy_type
 from rollout.policy_wrapper import Policy
 from rollout.report import build_report
-from rollout.run_rollout import _bundle_provenance, load_trials
+from rollout.retry_controller import GraspRetryConfig, GraspRetryController
+from rollout.run_rollout import _bundle_provenance, _execute_trial, load_trials
 from rollout.success_checker import ThreePhaseChecker
 
 
@@ -299,7 +300,151 @@ def test_success_checker_and_report() -> None:
     }
     report = build_report([result], run_metadata=provenance)
     assert report["overall"]["success_rate"] == 1.0
+    assert report["overall"]["first_attempt_success_rate"] == 1.0
+    assert report["overall"]["recovered_success_rate"] == 0.0
+    assert report["overall"]["retry_rate"] == 0.0
     assert report["provenance"] == provenance
+
+
+class _RetryPolicy:
+    def __init__(self) -> None:
+        self.seed = 0
+        self.reset_seeds: list[int] = []
+
+    def reset(self) -> None:
+        self.reset_seeds.append(self.seed)
+
+    def infer(self, obs: dict, *, execute_horizon: int) -> np.ndarray:
+        return np.zeros((execute_horizon, 13), dtype=np.float32)
+
+
+class _RetryEnv:
+    def __init__(self) -> None:
+        self.attempt_index = 0
+        self.step_index = 0
+        self.recovery_calls: list[tuple[int, tuple[float, ...] | None]] = []
+        self.current = self._state(contact_count=0, object_height=0.0)
+        self.sequences = [
+            [
+                self._state(contact_count=0, object_height=0.0),
+                self._state(contact_count=0, object_height=0.0),
+            ],
+            [
+                self._state(contact_count=2, object_height=0.0),
+                self._state(contact_count=2, object_height=0.03),
+            ],
+        ]
+
+    @staticmethod
+    def _state(*, contact_count: int, object_height: float) -> dict:
+        return {
+            "object_position": [0.0, 0.0, object_height],
+            "eef_position": [0.0, 0.0, 0.05],
+            "contact_count": contact_count,
+        }
+
+    def state(self) -> dict:
+        return self.current
+
+    def step(self, action: np.ndarray) -> dict:
+        sequence = self.sequences[self.attempt_index]
+        self.current = sequence[min(self.step_index, len(sequence) - 1)]
+        self.step_index += 1
+        return {"images": {}}
+
+    def recover(
+        self,
+        *,
+        steps: int,
+        joint_positions: tuple[float, ...] | None,
+    ) -> dict:
+        self.recovery_calls.append((steps, joint_positions))
+        self.attempt_index += 1
+        self.step_index = 0
+        self.current = self._state(contact_count=0, object_height=0.0)
+        return {"images": {}}
+
+
+def test_task_grasp_retry_recovers_after_unconfirmed_contact() -> None:
+    policy = _RetryPolicy()
+    env = _RetryEnv()
+    checker = ThreePhaseChecker(
+        {
+            "approach_distance_m": 0.1,
+            "close_contact_count": 2,
+            "close_hold_steps": 1,
+            "lift_height_m": 0.02,
+            "lift_hold_steps": 1,
+        }
+    )
+    retry = GraspRetryConfig(
+        enabled=True,
+        max_attempts=2,
+        approach_timeout_steps=4,
+        close_timeout_steps=1,
+        recovery_steps=3,
+        seed_stride=100,
+    )
+
+    result = _execute_trial(
+        policy=policy,
+        env=env,
+        checker=checker,
+        obs={"images": {}},
+        horizon=2,
+        max_chunks=2,
+        base_seed=7,
+        retry_config=retry,
+    )
+
+    assert result["success"] is True
+    assert result["attempt_count"] == 2
+    assert result["retry_count"] == 1
+    assert result["first_attempt_success"] is False
+    assert result["recovered_success"] is True
+    assert result["recovery_steps"] == 3
+    assert result["attempts"][0]["retry_reason"] == "close_timeout"
+    assert policy.reset_seeds == [7, 107]
+    assert env.recovery_calls == [(3, None)]
+
+
+def test_task_grasp_retry_requires_safe_configuration() -> None:
+    with pytest.raises(ValueError, match="max_attempts"):
+        GraspRetryConfig(enabled=True, max_attempts=1).validate()
+    with pytest.raises(ValueError, match="13 finite values"):
+        GraspRetryConfig.from_execution(
+            {
+                "task_grasp_retry": {
+                    "enabled": True,
+                    "max_attempts": 2,
+                    "recovery_joint_positions": [0.0] * 12,
+                }
+            }
+        )
+
+
+def test_task_grasp_retry_detects_approach_timeout() -> None:
+    checker = ThreePhaseChecker({"approach_distance_m": 0.1})
+    controller = GraspRetryController(
+        GraspRetryConfig(
+            enabled=True,
+            max_attempts=2,
+            approach_timeout_steps=2,
+            close_timeout_steps=2,
+        )
+    )
+    controller.begin_attempt(0)
+    far_state = {
+        "object_position": [0.0, 0.0, 0.0],
+        "eef_position": [1.0, 0.0, 0.0],
+        "contact_count": 0,
+    }
+    checker.update(far_state)
+    controller.observe(checker)
+    assert controller.retry_reason(checker) is None
+    checker.update(far_state)
+    controller.observe(checker)
+    assert controller.retry_reason(checker) == "approach_timeout"
 
 
 def test_bundle_provenance_maps_manifest_fields() -> None:

@@ -5,6 +5,7 @@ import json
 import math
 import platform
 import sys
+from dataclasses import asdict
 from datetime import datetime, timezone
 from importlib import metadata
 from pathlib import Path
@@ -83,6 +84,88 @@ def _bundle_provenance(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _execute_trial(
+    *,
+    policy: Any,
+    env: Any,
+    checker: Any,
+    obs: dict[str, Any],
+    horizon: int,
+    max_chunks: int,
+    base_seed: int,
+    retry_config: Any,
+) -> dict[str, Any]:
+    from rollout.retry_controller import GraspRetryController
+
+    controller = GraspRetryController(retry_config)
+    attempts: list[dict[str, Any]] = []
+    recovery_steps_total = 0
+
+    for attempt_index in range(retry_config.attempt_limit):
+        controller.begin_attempt(attempt_index)
+        attempt_seed = controller.sampling_seed(base_seed)
+        policy.seed = attempt_seed
+        policy.reset()
+        checker.reset()
+        checker.prime(env.state())
+        retry_reason = None
+
+        for _ in range(max_chunks):
+            chunk = policy.infer(obs, execute_horizon=horizon)
+            for action in chunk[:horizon]:
+                obs = env.step(action)
+                checker.update(env.state())
+                controller.observe(checker)
+                if checker.done():
+                    break
+                retry_reason = controller.retry_reason(checker)
+                if retry_reason is not None:
+                    break
+            if checker.done() or retry_reason is not None:
+                break
+
+        if (
+            retry_config.enabled
+            and not checker.done()
+            and not checker.closed
+            and retry_reason is None
+        ):
+            retry_reason = "attempt_budget_exhausted"
+
+        attempt_summary = {
+            "attempt_index": attempt_index,
+            "sampling_seed": attempt_seed,
+            **checker.summary(),
+            "retry_reason": retry_reason,
+            "retry_performed": bool(retry_reason is not None and controller.can_retry()),
+        }
+        attempts.append(attempt_summary)
+
+        if checker.done() or not attempt_summary["retry_performed"]:
+            break
+        obs = env.recover(
+            steps=retry_config.recovery_steps,
+            joint_positions=retry_config.recovery_joint_positions,
+        )
+        recovery_steps_total += retry_config.recovery_steps
+
+    final = checker.summary()
+    final_attempt_steps = int(final["steps"])
+    final.update(
+        {
+            "steps": sum(int(attempt["steps"]) for attempt in attempts),
+            "final_attempt_steps": final_attempt_steps,
+            "attempt_count": len(attempts),
+            "retry_count": max(0, len(attempts) - 1),
+            "first_attempt_success": bool(attempts and attempts[0]["success"]),
+            "recovered_success": bool(final["success"] and len(attempts) > 1),
+            "recovery_steps": recovery_steps_total,
+            "attempts": attempts,
+        }
+    )
+    return final
+
+
 def run(
     bundle_dir: Path,
     grid_path: Path,
@@ -92,15 +175,20 @@ def run(
     execute_horizon: int | None = None,
 ) -> None:
     from rollout.policy_wrapper import Policy
+    from rollout.retry_controller import GraspRetryConfig
     from rollout.sim_env import GraspEnv
     from rollout.success_checker import ThreePhaseChecker
 
     bundle_cfg = yaml.safe_load((bundle_dir / "config.yaml").read_text())
     grid = yaml.safe_load(grid_path.read_text())
     execution_cfg = grid.get("execution", {})
+    retry_config = GraspRetryConfig.from_execution(execution_cfg)
     physics_dt = float(execution_cfg.get("physics_dt_s", PHYSICS_DT))
     render_dt = float(execution_cfg.get("render_dt_s", RENDER_DT))
     chunk_size = int(bundle_cfg["action"]["chunk_size"])
+    max_chunks = int(execution_cfg.get("max_chunks", 16))
+    if max_chunks < 1:
+        raise ValueError("execution.max_chunks must be positive")
     horizon = int(
         bundle_cfg["action"]["execute_horizon"] if execute_horizon is None else execute_horizon
     )
@@ -134,6 +222,7 @@ def run(
         "chunk_size": chunk_size,
         "execute_horizon": horizon,
         "replan": execution_cfg.get("replan", "after_execute_horizon"),
+        "task_grasp_retry": asdict(retry_config),
         "physics_snapshot": grid.get("sim", {}).get("physics_snapshot", {}),
         **_bundle_provenance(policy.manifest),
     }
@@ -143,22 +232,21 @@ def run(
     results_path = out_dir / "results.jsonl"
     with results_path.open("w", encoding="utf-8") as results_file:
         for trial in trials:
-            policy.seed = int(trial.get("sampling_seed", policy.seed))
-            policy.reset()
+            base_seed = int(trial.get("sampling_seed", policy.seed))
             obs = env.reset(trial)
-            checker.reset()
-            checker.prime(env.state())
             error = None
+            execution_result = None
             try:
-                for _ in range(int(grid.get("execution", {}).get("max_chunks", 16))):
-                    chunk = policy.infer(obs, execute_horizon=horizon)
-                    for action in chunk[:horizon]:
-                        obs = env.step(action)
-                        checker.update(env.state())
-                        if checker.done():
-                            break
-                    if checker.done():
-                        break
+                execution_result = _execute_trial(
+                    policy=policy,
+                    env=env,
+                    checker=checker,
+                    obs=obs,
+                    horizon=horizon,
+                    max_chunks=max_chunks,
+                    base_seed=base_seed,
+                    retry_config=retry_config,
+                )
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
             result = {
@@ -167,7 +255,7 @@ def run(
                 "sampling_seed": trial.get("sampling_seed"),
                 "chunk_size": chunk_size,
                 "execute_horizon": horizon,
-                **checker.summary(),
+                **(execution_result or checker.summary()),
                 "error": error,
             }
             if error:

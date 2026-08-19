@@ -20,6 +20,17 @@ def build_report(
         return {
             "trials": count,
             "success_rate": sum(bool(item["success"]) for item in items) / count,
+            "first_attempt_success_rate": sum(
+                bool(item.get("first_attempt_success", item["success"])) for item in items
+            )
+            / count,
+            "recovered_success_rate": sum(
+                bool(item.get("recovered_success", False)) for item in items
+            )
+            / count,
+            "retry_rate": sum(int(item.get("retry_count", 0)) > 0 for item in items) / count,
+            "mean_attempt_count": sum(int(item.get("attempt_count", 1)) for item in items)
+            / count,
             "approach_rate": sum(bool(item["approach_success"]) for item in items) / count,
             "close_rate": sum(bool(item["close_success"]) for item in items) / count,
             "lift_rate": sum(bool(item["lift_success"]) for item in items) / count,

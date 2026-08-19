@@ -63,6 +63,17 @@ execution:
   render_dt_s: 0.03333333333333333
   timing_status: deployment_assumption_unverified_no_dataset_timestamps
   max_chunks: 16
+  # Enable only after sim.initial_joint_positions is a calibrated open-hand
+  # pregrasp pose. Recovery keeps the object state and interpolates the robot
+  # back to that pose before resampling with a different policy seed.
+  task_grasp_retry:
+    enabled: false
+    max_attempts: 2
+    approach_timeout_steps: 96
+    close_timeout_steps: 64
+    recovery_steps: 30
+    seed_stride: 100003
+    recovery_joint_positions: null
 
 success_criteria:
   approach_distance_m: 0.08

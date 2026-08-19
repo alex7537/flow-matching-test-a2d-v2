@@ -77,8 +77,11 @@ class GraspEnv:
             raise ValueError("render_dt must be an integer multiple of physics_dt")
         self.contact_sensors = self._build_contact_sensors(sim["contact_sensor_prim_paths"])
         self.initial_joint_positions = np.asarray(sim.get("initial_joint_positions", [0.0] * 13), dtype=np.float32)
-        if self.initial_joint_positions.shape != (13,):
-            raise ValueError("sim.initial_joint_positions must contain 13 values")
+        if self.initial_joint_positions.shape != (13,) or not np.isfinite(
+            self.initial_joint_positions
+        ).all():
+            raise ValueError("sim.initial_joint_positions must contain 13 finite values")
+        self.current_initial_joint_positions = self.initial_joint_positions.copy()
         self.frames: list[np.ndarray] = []
 
     def _build_contact_sensors(self, prim_paths: list[str]) -> list[Any]:
@@ -99,8 +102,11 @@ class GraspEnv:
         orientation = np.asarray(trial.get("object_orientation_wxyz", [1.0, 0.0, 0.0, 0.0]), dtype=np.float32)
         self.object.set_world_pose(position=position, orientation=orientation)
         initial = np.asarray(trial.get("initial_joint_positions", self.initial_joint_positions), dtype=np.float32)
-        if initial.shape != (13,):
-            raise ValueError(f"trial {trial.get('id')} initial_joint_positions must contain 13 values")
+        if initial.shape != (13,) or not np.isfinite(initial).all():
+            raise ValueError(
+                f"trial {trial.get('id')} initial_joint_positions must contain 13 finite values"
+            )
+        self.current_initial_joint_positions = initial.copy()
         all_positions = self.robot.get_joint_positions().copy()
         all_positions[self.joint_indices] = initial
         self.robot.set_joint_positions(all_positions)
@@ -131,6 +137,30 @@ class GraspEnv:
         for substep in range(self.physics_substeps):
             self.world.step(render=substep == self.physics_substeps - 1)
         return self.observe()
+
+    def recover(
+        self,
+        *,
+        steps: int,
+        joint_positions: tuple[float, ...] | None = None,
+    ) -> dict[str, Any]:
+        """Move smoothly to a configured safe pregrasp state without resetting the object."""
+        if steps < 1:
+            raise ValueError("recovery steps must be positive")
+        target = np.asarray(
+            self.current_initial_joint_positions if joint_positions is None else joint_positions,
+            dtype=np.float32,
+        )
+        if target.shape != (13,) or not np.isfinite(target).all():
+            raise ValueError("recovery joint positions must contain 13 finite values")
+        all_positions = np.asarray(self.robot.get_joint_positions(), dtype=np.float32)
+        start = all_positions[self.joint_indices].copy()
+        obs: dict[str, Any] | None = None
+        for step_index in range(1, steps + 1):
+            alpha = float(step_index) / float(steps)
+            obs = self.step(start + alpha * (target - start))
+        assert obs is not None
+        return obs
 
     def state(self) -> dict[str, Any]:
         object_position, _ = self.object.get_world_pose()
