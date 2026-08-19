@@ -93,6 +93,7 @@ tail padded windows    train 14,715 / val 1,635
 6. action contract：dataset、stats、checkpoint、bundle、rollout 均校验 V2/V3 语义；
 7. `use_proprio` 开关：在完全相同预算下比较 RGB+proprio 与纯 RGB；
 8. deterministic validation、EMA、watchdog 和原子 checkpoint 保存。
+9. task-level grasp retry：在 chunk-level replanning 外增加 `attempt → verify → recover → re-attempt`；未接近或没有形成稳定多指接触时恢复到安全预抓取位，清空 policy 历史并更换 sampling seed 后重抓。默认关闭，校准恢复位后启用。
 
 详细历史见 [`CHANGE.md`](CHANGE.md)。
 

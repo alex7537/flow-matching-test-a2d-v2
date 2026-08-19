@@ -2,6 +2,15 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-08-19｜本地 rollout 增加 task-level 抓取重试（待 Isaac 验收）
+
+- `7c0ea11` 实现本次 task-level retry orchestration，并与原有 chunk-level policy replanning 分层。
+- 在现有 `observation → chunk prediction → execute → replan` 闭环外新增 `GraspRetryController`，负责 task-level 的 `attempt → verify grasp → recover → re-attempt → lift`；未在预算内接近物体，或接近后持续没有形成稳定多指接触时结束当前 attempt。
+- 已经确认稳定接触后不触发该重试，避免把正常 lift 延迟误判为抓取失败。
+- retry 保持物体状态不 reset，将机器人从当前实际 joint 插值恢复到 trial 初始安全预抓取位（或显式配置的13维恢复位），清空 policy 图像/proprio/action 历史，并用不同 sampling seed 重新规划。
+- `results.jsonl` 新增逐 attempt 记录、retry 原因、首次成功、恢复后成功和恢复步数；report 新增 first-attempt/recovered success rate、retry rate 与平均 attempts。
+- retry 默认关闭；只有完成相机、接触传感器和安全恢复位标定后才能启用。语法、YAML、配置拒绝路径、close-timeout 与 approach-timeout 假环境测试已通过，尚未在真实 Isaac 场景验收，也未同步开发机。
+
 ## 2026-08-18｜V3 手部 commanded target 动作语义落地
 
 - `4782456` 将 V3 action 定义为 `arm2_pos(7) + hand2_pos_target(6)`；observation 仍使用实际 `arm2_pos(7) + hand2_pos(6)`，因此 target 是未来 action GT，不是 encoder 输入。
