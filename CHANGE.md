@@ -4,8 +4,8 @@
 
 ## 2026-08-19｜README 增加成功抓取拼接展示
 
-- `7abc36f` 将同一 episode/seed 下 H4、H8、H12、H16 的四段成功抓取视频压缩为 2×2 H.264 MP4，并生成静态封面；README 点击封面即可播放。
-- 展示文件为 `docs/assets/grasp_success_montage.mp4`（约 630KB）和 `.jpg`（约 72KB）；原始大视频仍保留在外部 Downloads，不进入 Git。
+- `7abc36f` 将同一 episode/seed 下 H4、H8、H12、H16 的四段成功抓取视频压缩为 2×2 H.264 MP4；后续增加 animated GIF，使 GitHub README 打开后自动播放并无限循环。
+- 展示文件为 `docs/assets/grasp_success_montage.gif`（约 4.0MB）和高清 `.mp4`（约 630KB）；原始大视频仍保留在外部 Downloads，不进入 Git。
 - 本轮只做单个简单拼接，尚未按模型、checkpoint、execute horizon 或任务类型建立分类画廊。
 
 ## 2026-08-18｜V3 手部 commanded target 动作语义落地
