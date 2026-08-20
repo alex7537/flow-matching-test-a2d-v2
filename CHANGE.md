@@ -8,6 +8,7 @@
 - 在现有 `observation → chunk prediction → execute → replan` 闭环外新增 `GraspRetryController`，负责 task-level 的 `attempt → verify grasp → recover → re-attempt → lift`；未在预算内接近物体，或接近后持续没有形成稳定多指接触时结束当前 attempt。
 - 已经确认稳定接触后不触发该重试，避免把正常 lift 延迟误判为抓取失败。
 - retry 保持物体状态不 reset，将机器人从当前实际 joint 插值恢复到 trial 初始安全预抓取位（或显式配置的13维恢复位），清空 policy 图像/proprio/action 历史，并用不同 sampling seed 重新规划。
+- `7a294e6` 将恢复拆成“先张手、再退臂、最后稳定”，增加抓住后接触丢失、lift 超时重试和 task 总 policy-step 熔断，防止夹物退臂或 retry 无限运行。
 - `results.jsonl` 新增逐 attempt 记录、retry 原因、首次成功、恢复后成功和恢复步数；report 新增 first-attempt/recovered success rate、retry rate 与平均 attempts。
 - retry 默认关闭；只有完成相机、接触传感器和安全恢复位标定后才能启用。语法、YAML、配置拒绝路径、close-timeout 与 approach-timeout 假环境测试已通过，尚未在真实 Isaac 场景验收，也未同步开发机。
 

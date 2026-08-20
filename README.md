@@ -132,6 +132,7 @@ summary.json
 - [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：数据、padding、mask 与 oversampling；
 - [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR；
 - [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练与停止判断；
+- [`docs/TASK_LEVEL_GRASP_RETRY.md`](docs/TASK_LEVEL_GRASP_RETRY.md)：task-level 抓取重试、恢复与安全门禁；
 - [`artifacts_index.md`](artifacts_index.md)：外部训练和部署产物索引。
 
 训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git。
