@@ -97,6 +97,18 @@ tail padded windows    train 14,715 / val 1,635
 
 详细历史见 [`CHANGE.md`](CHANGE.md)。
 
+## 当前 retry 分支的定位
+
+`feat/task-level-grasp-retry` 不代表 CFM 已经学会 recovery。当前实现是推理侧的传感器检测、task-level 状态机和固定安全恢复动作，模型权重与训练 loss 均未改变。
+
+该分支暂时保留三个用途：
+
+1. rollout 安全 fallback：抓取未确认、接触丢失或 lift 超时时停止旧动作并恢复；
+2. 评测与归因：分别记录首次成功率、恢复成功率、retry 原因和控制成本；
+3. V4 数据采集器：让当前模型进入真实失败状态，再记录专家/脚本执行的张手、退臂、重新接近、重新闭合与 lift 完整轨迹。
+
+只有头部 RGB 成功/失败视频时，可以训练视频级成功检测器或 reward model，但不能直接监督 `[16,13]` action policy。要把 retry 真正 fine-tune 进模型，新增数据必须同步包含 RGB、实际 joint、commanded target、contact/object-height、attempt/phase、action 与 terminal reward，并以完整 episode/session 为单位切分，不能随机拆帧进入 train/val。
+
 ## 训练
 
 RGB+proprio：
