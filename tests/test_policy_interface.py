@@ -16,12 +16,14 @@ def _policy(
     policy_cfg: dict[str, object] | None = None,
     *,
     use_proprio: bool = True,
+    enhanced_proprio: bool = False,
 ):
     return build_policy(
         policy_cfg=policy_cfg or {"type": "flow_matching"},
         model_cfg={
             "encoder_type": "cnn",
             "use_proprio": use_proprio,
+            "enhanced_proprio": enhanced_proprio,
             "d_model": 16,
             "n_head": 4,
             "n_layer": 1,
@@ -101,6 +103,45 @@ def test_rgb_only_policy_does_not_require_or_use_proprio() -> None:
     assert policy.use_proprio is False
     assert policy.proprio_proj is None
     assert sampled.action.shape == (2, 4, 13)
+
+
+def test_enhanced_proprio_warm_start_is_zero_initialized_and_trainable() -> None:
+    base = _policy()
+    enhanced = _policy(enhanced_proprio=True)
+    load_result = enhanced.load_state_dict(base.state_dict(), strict=False)
+    expected_missing = {
+        f"{name}.{field}"
+        for name in (
+            "joint_delta_proj",
+            "previous_action_proj",
+            "hand_tracking_error_proj",
+        )
+        for field in ("weight", "bias")
+    }
+    assert set(load_result.missing_keys) == expected_missing
+    assert load_result.unexpected_keys == []
+    for projection in (
+        enhanced.joint_delta_proj,
+        enhanced.previous_action_proj,
+        enhanced.hand_tracking_error_proj,
+    ):
+        assert projection is not None
+        assert torch.count_nonzero(projection.weight) == 0
+        assert torch.count_nonzero(projection.bias) == 0
+
+    batch = _batch()
+    batch["obs"].update(
+        {
+            "joint_delta": torch.randn(2, 13),
+            "previous_action": torch.randn(2, 13),
+            "hand_tracking_error": torch.randn(2, 6),
+        }
+    )
+    loss, _ = enhanced.compute_loss(batch)
+    loss.backward()
+    assert enhanced.joint_delta_proj is not None
+    assert enhanced.joint_delta_proj.weight.grad is not None
+    assert torch.count_nonzero(enhanced.joint_delta_proj.weight.grad) > 0
 
 
 def test_masked_action_mse_ignores_padded_timesteps() -> None:

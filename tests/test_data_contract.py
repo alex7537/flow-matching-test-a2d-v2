@@ -110,6 +110,52 @@ class DataContractTest(unittest.TestCase):
             np.testing.assert_array_equal(sample["action_mask"].numpy(), [1, 0, 0, 0])
             dataset.close()
 
+    def test_enhanced_proprio_uses_only_current_and_previous_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "episode.hdf5"
+            length = 5
+            qpos = np.repeat(np.arange(length, dtype=np.float32)[:, None], 13, axis=1)
+            actions = qpos.copy()
+            actions[:, 7:] += 2.0
+            with h5py.File(path, "w") as file:
+                observations = file.create_group("observations")
+                observations.create_dataset("qpos", data=qpos)
+                observations.create_dataset(
+                    "rgb_head", data=np.zeros((length, 4, 4, 3), dtype=np.uint8)
+                )
+                file.create_dataset("action", data=actions)
+
+            stats = {
+                "state": {"min": [0.0] * 13, "span": [4.0] * 13},
+                "action": {"min": [0.0] * 13, "span": [4.0] * 13},
+            }
+            dataset = A2DFlowDataset(
+                cfg=A2DConfig(
+                    image_keys=("rgb_head",),
+                    image_size=4,
+                    history_steps=1,
+                    enhanced_proprio=True,
+                    action_horizon=2,
+                    action_offset_steps=1,
+                    aug_random_crop_pad=0,
+                ),
+                episodes=[{"path": str(path), "length": length}],
+                norm_stats=stats,
+                train=False,
+            )
+
+            self.assertEqual(dataset.samples[0], (0, 1))
+            sample = dataset[0]
+            np.testing.assert_allclose(sample["joint_delta"].numpy(), [0.5] * 13)
+            np.testing.assert_allclose(
+                sample["previous_action"].numpy(), normalize(actions[1], stats["action"])
+            )
+            np.testing.assert_allclose(sample["hand_tracking_error"].numpy(), [1.0] * 6)
+            np.testing.assert_allclose(
+                sample["action"].numpy(), normalize(actions[2:4], stats["action"])
+            )
+            dataset.close()
+
     def test_hdf5_handle_cache_is_lru_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = []

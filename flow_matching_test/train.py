@@ -187,6 +187,7 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
         ),
         image_size=int(data_cfg.get("image_size", 224)),
         history_steps=int(data_cfg.get("history_steps", 1)),
+        enhanced_proprio=bool(data_cfg.get("enhanced_proprio", False)),
         action_horizon=int(data_cfg.get("action_horizon", 16)),
         action_offset_steps=int(data_cfg.get("action_offset_steps", 1)),
         include_tail_padded_windows=bool(
@@ -511,6 +512,10 @@ def main() -> None:
     if training_cfg["periodic_checkpoint_every_n_epochs"] < 0:
         raise ValueError("training.periodic_checkpoint_every_n_epochs must be >= 0")
     model_cfg = cfg["model"]
+    model_cfg["enhanced_proprio"] = bool(model_cfg.get("enhanced_proprio", False))
+    if model_cfg["enhanced_proprio"] and not bool(model_cfg.get("use_proprio", True)):
+        raise ValueError("model.enhanced_proprio requires model.use_proprio=true")
+    data_cfg["enhanced_proprio"] = model_cfg["enhanced_proprio"]
     policy_cfg = materialize_policy_config(
         copy.deepcopy(cfg.get("policy", {"type": "flow_matching"}))
     )
@@ -648,6 +653,7 @@ def main() -> None:
         "action_offset_steps": train_dataset.cfg.action_offset_steps,
         "include_tail_padded_windows": train_dataset.cfg.include_tail_padded_windows,
         "lift_oversample_factor": train_dataset.cfg.lift_oversample_factor,
+        "enhanced_proprio": train_dataset.cfg.enhanced_proprio,
         "dataset_manifest_sha256": split_manifest.get("dataset_manifest_sha256"),
         "split_manifest_sha256": split_manifest.get("split_manifest_sha256"),
     }
@@ -764,7 +770,12 @@ def main() -> None:
             "training_environment": _runtime_environment(),
             "model_schema": {
                 "obs_keys": list(data_cfg.get("image_keys", []))
-                + (["proprio"] if model_cfg.get("use_proprio", True) else []),
+                + (["proprio"] if model_cfg.get("use_proprio", True) else [])
+                + (
+                    ["joint_delta", "previous_action", "hand_tracking_error"]
+                    if model_cfg["enhanced_proprio"]
+                    else []
+                ),
                 "action_keys": [
                     str(item["name"])
                     for item in action_components(train_dataset.cfg.action_semantics)
@@ -777,6 +788,7 @@ def main() -> None:
                 "action_horizon": train_dataset.action_horizon,
                 "action_offset_steps": train_dataset.cfg.action_offset_steps,
                 "uses_action_mask": train_dataset.cfg.include_tail_padded_windows,
+                "enhanced_proprio": train_dataset.cfg.enhanced_proprio,
                 "action_layout": action_components(train_dataset.cfg.action_semantics),
             },
             "adapter_metadata": {
@@ -787,6 +799,7 @@ def main() -> None:
                 "schema_version": 1,
                 "image_keys": list(data_cfg.get("image_keys", [])),
                 "use_proprio": bool(model_cfg.get("use_proprio", True)),
+                "enhanced_proprio": bool(model_cfg["enhanced_proprio"]),
                 "num_inference_steps": int(model_cfg.get("num_inference_steps", 40)),
             },
         }
@@ -832,7 +845,32 @@ def main() -> None:
         for key in ("stats_digest", "dataset_manifest_sha256", "split_manifest_sha256"):
             if checkpoint_provenance.get(key) != data_provenance.get(key):
                 raise ValueError(f"init checkpoint {key} does not match the current dataset")
-        model.load_state_dict(checkpoint["model_state_dict"])
+        source_enhanced_proprio = bool(
+            checkpoint.get("config", {}).get("model", {}).get("enhanced_proprio", False)
+        )
+        if source_enhanced_proprio and not model_cfg["enhanced_proprio"]:
+            raise ValueError("cannot initialize a base model from an enhanced-proprio checkpoint")
+        missing_init_keys: list[str] = []
+        if model_cfg["enhanced_proprio"] and not source_enhanced_proprio:
+            load_result = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+            allowed_missing = {
+                f"{name}.{field}"
+                for name in (
+                    "joint_delta_proj",
+                    "previous_action_proj",
+                    "hand_tracking_error_proj",
+                )
+                for field in ("weight", "bias")
+            }
+            if set(load_result.missing_keys) != allowed_missing or load_result.unexpected_keys:
+                raise ValueError(
+                    "enhanced-proprio init state mismatch: "
+                    f"missing={load_result.missing_keys}, "
+                    f"unexpected={load_result.unexpected_keys}"
+                )
+            missing_init_keys = sorted(load_result.missing_keys)
+        else:
+            model.load_state_dict(checkpoint["model_state_dict"])
         init_event = {
             "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
             "checkpoint": str(init_path),
@@ -840,6 +878,8 @@ def main() -> None:
             "source_epoch": int(checkpoint.get("epoch", -1)),
             "source_global_step": int(checkpoint.get("global_step", 0)),
             "optimizer_scheduler_reset": True,
+            "source_enhanced_proprio": source_enhanced_proprio,
+            "initialized_enhanced_modules": missing_init_keys,
         }
         _append_jsonl(output_dir / "init_events.jsonl", init_event)
         print("INIT_MODEL_ONLY_OK " + json.dumps(init_event, ensure_ascii=False))
@@ -878,6 +918,11 @@ def main() -> None:
                 "resume checkpoint action_offset_steps does not match the current dataset"
             )
         checkpoint_data_cfg = checkpoint.get("config", {}).get("data", {})
+        checkpoint_model_cfg = checkpoint.get("config", {}).get("model", {})
+        if bool(checkpoint_model_cfg.get("enhanced_proprio", False)) != bool(
+            model_cfg["enhanced_proprio"]
+        ):
+            raise ValueError("resume checkpoint enhanced_proprio does not match current model")
         checkpoint_tail_windows = bool(
             checkpoint_provenance.get(
                 "include_tail_padded_windows",
@@ -1284,6 +1329,7 @@ def main() -> None:
         "timm_tokens_per_frame": int(model_cfg.get("timm_tokens_per_frame", 1)),
         "timm_token_mode": str(model_cfg.get("timm_token_mode", "spatial")),
         "use_proprio": bool(model_cfg.get("use_proprio", True)),
+        "enhanced_proprio": bool(model_cfg["enhanced_proprio"]),
         "batch_size": int(training_cfg.get("batch_size", 64)),
         "lr": float(training_cfg.get("lr", 1.0e-4)),
         "backbone_lr_multiplier": backbone_lr_multiplier,

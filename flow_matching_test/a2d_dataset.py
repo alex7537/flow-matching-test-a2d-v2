@@ -75,6 +75,7 @@ class A2DConfig:
     action_semantics: str = EXECUTED_ACTION_SEMANTICS
     image_size: int = 224
     history_steps: int = 1
+    enhanced_proprio: bool = False
     action_horizon: int = 16
     action_offset_steps: int = 1
     include_tail_padded_windows: bool = False
@@ -424,6 +425,12 @@ def denormalize(x: np.ndarray, s: dict) -> np.ndarray:
     return (x + 1.0) * 0.5 * span + lo
 
 
+def normalize_delta(x: np.ndarray, s: dict) -> np.ndarray:
+    """Scale a zero-centered delta by the protected train range."""
+    span = np.maximum(np.asarray(s["span"], dtype=np.float32), 1.0e-4)
+    return np.clip(2.0 * x / span, -3.0, 3.0)
+
+
 # --------------------------------------------------------------------------- #
 # Dataset
 # --------------------------------------------------------------------------- #
@@ -446,7 +453,7 @@ class A2DFlowDataset(Dataset):
         self.epoch = 0
         # flat sample index: (ep_idx, t); every t with a full history is valid
         self.samples: list[tuple[int, int]] = []
-        h = cfg.history_steps - 1
+        h = max(cfg.history_steps - 1, int(cfg.enhanced_proprio))
         for i, e in enumerate(episodes):
             for t in range(h, e["length"] - cfg.action_offset_steps):
                 self.samples.append((i, t))
@@ -557,8 +564,8 @@ class A2DFlowDataset(Dataset):
 
         # state (history, D) -> flat, normalized
         s0 = t - (cfg.history_steps - 1)
-        state = f[cfg.obs_group][cfg.state_key][s0:t + 1].astype(np.float32)
-        state = normalize(state, self.stats["state"]).reshape(-1)
+        state_raw = f[cfg.obs_group][cfg.state_key][s0:t + 1].astype(np.float32)
+        state = normalize(state_raw, self.stats["state"]).reshape(-1)
 
         # Future action chunk [t+offset, t+offset+H) with tail padding + mask.
         T, H = ep["length"], cfg.action_horizon
@@ -573,12 +580,38 @@ class A2DFlowDataset(Dataset):
 
         action = normalize(chunk, self.stats["action"])
 
-        return {
+        result = {
             "images": images,
             "state": torch.from_numpy(state),
             "action": torch.from_numpy(action),
             "action_mask": torch.from_numpy(mask),
         }
+        if cfg.enhanced_proprio:
+            current_state = f[cfg.obs_group][cfg.state_key][t].astype(np.float32)
+            previous_state = f[cfg.obs_group][cfg.state_key][t - 1].astype(np.float32)
+            current_action = f[cfg.action_key][t].astype(np.float32)
+            state_span = np.asarray(self.stats["state"]["span"], dtype=np.float32)
+            action_span = np.asarray(self.stats["action"]["span"], dtype=np.float32)
+            hand_scale = np.maximum(state_span[7:], action_span[7:])
+            result.update(
+                {
+                    "joint_delta": torch.from_numpy(
+                        normalize_delta(current_state - previous_state, self.stats["state"])
+                    ),
+                    "previous_action": torch.from_numpy(
+                        normalize(current_action, self.stats["action"])
+                    ),
+                    "hand_tracking_error": torch.from_numpy(
+                        np.clip(
+                            2.0 * (current_action[7:] - current_state[7:])
+                            / np.maximum(hand_scale, cfg.range_eps),
+                            -3.0,
+                            3.0,
+                        )
+                    ),
+                }
+            )
+        return result
 
 
 class A2DProcessedWindowDataset(A2DFlowDataset):
@@ -695,6 +728,10 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
             for view_idx, key in enumerate(self.cfg.image_keys)
         }
         obs["proprio"] = sample["state"]
+        if self.cfg.enhanced_proprio:
+            obs["joint_delta"] = sample["joint_delta"]
+            obs["previous_action"] = sample["previous_action"]
+            obs["hand_tracking_error"] = sample["hand_tracking_error"]
         return {
             "obs": obs,
             "action": sample["action"],

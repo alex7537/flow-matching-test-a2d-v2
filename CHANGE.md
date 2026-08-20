@@ -2,6 +2,13 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-08-20｜V3 enhanced-proprio fine-tune 路线
+
+- 在现有 actual qpos token 上增加 `joint_delta(13)`、`previous_action(13)` 与 `hand_tracking_error(6)` 三个零初始化投影；训练标签仍从 `action[t+1]` 开始，不读取未来信息。
+- rollout 每个控制步记录实际 qpos 与执行 action，使一帧 joint delta、V3 `arm actual + hand command` context 与训练严格对称。
+- 从 V3 RGB+proprio best raw 做 model-only init，重置 optimizer/scheduler；实际预算为 219,040 effective samples、6,845 steps/epoch、20 epochs、136,900 steps、6,845 warmup。
+- 本地目标测试34项和开发机 Python3.11 全套43项通过；真实 checkpoint CUDA forward/backward、enhanced gradient 与最小 trainer smoke 通过。
+
 ## 2026-08-18｜V3 手部 commanded target 动作语义落地
 
 - `4782456` 将 V3 action 定义为 `arm2_pos(7) + hand2_pos_target(6)`；observation 仍使用实际 `arm2_pos(7) + hand2_pos(6)`，因此 target 是未来 action GT，不是 encoder 输入。

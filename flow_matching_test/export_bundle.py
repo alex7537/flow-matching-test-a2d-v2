@@ -65,6 +65,9 @@ def _inference_config(
     data_cfg = train_cfg["data"]
     model_cfg = train_cfg["model"]
     use_proprio = bool(model_cfg.get("use_proprio", True))
+    enhanced_proprio = bool(model_cfg.get("enhanced_proprio", False))
+    if enhanced_proprio and not use_proprio:
+        raise ValueError("enhanced_proprio bundle requires use_proprio=true")
     image_keys = list(data_cfg["image_keys"])
     bundle_cfg = train_cfg.get("deployment", {}).get("eval_bundle", {})
     action_semantics = validate_action_semantics(
@@ -114,6 +117,7 @@ def _inference_config(
             "timm_token_mode": str(model_cfg.get("timm_token_mode", "spatial")),
             "timm_tokens_per_frame": int(model_cfg.get("timm_tokens_per_frame", 1)),
             "use_proprio": use_proprio,
+            "enhanced_proprio": enhanced_proprio,
             "d_model": int(model_cfg.get("d_model", 128)),
             "n_head": int(model_cfg.get("n_head", 4)),
             "n_layer": int(model_cfg.get("n_layer", 4)),
@@ -138,6 +142,12 @@ def _inference_config(
             "image_size": image_size,
             "history_steps": int(data_cfg.get("history_steps", 1)),
             "proprio_dim": 13 if use_proprio else 0,
+            "enhanced_proprio": enhanced_proprio,
+            "enhanced_proprio_keys": (
+                ["joint_delta", "previous_action", "hand_tracking_error"]
+                if enhanced_proprio
+                else []
+            ),
             "freq_hz": 30,
             "freq_hz_status": "deployment_assumption_unverified_no_dataset_timestamps",
         },

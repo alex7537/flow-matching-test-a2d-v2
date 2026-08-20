@@ -59,6 +59,9 @@ def build_policy(
 ) -> ActionPolicy:
     policy_cfg = materialize_policy_config(policy_cfg)
     policy_type = str(policy_cfg["type"])
+    enhanced_proprio = bool(model_cfg.get("enhanced_proprio", False))
+    if enhanced_proprio and policy_type != "flow_matching":
+        raise ValueError("enhanced_proprio is currently supported only for flow_matching")
     if policy_type == "flow_matching":
         return FlowMatchingPolicy(
             image_keys=image_keys,
@@ -68,6 +71,7 @@ def build_policy(
             timm_tokens_per_frame=int(model_cfg.get("timm_tokens_per_frame", 1)),
             timm_token_mode=str(model_cfg.get("timm_token_mode", "spatial")),
             use_proprio=bool(model_cfg.get("use_proprio", True)),
+            enhanced_proprio=enhanced_proprio,
             action_dim=int(action_dim),
             history_steps=int(history_steps),
             action_horizon=int(action_horizon),

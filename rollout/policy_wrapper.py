@@ -16,6 +16,7 @@ import yaml
 
 from flow_matching_test.action_contract import (
     EXECUTED_ACTION_SEMANTICS,
+    HYBRID_ACTION_SEMANTICS,
     validate_action_semantics,
 )
 from flow_matching_test.policies.base import ActionPolicy
@@ -63,6 +64,9 @@ class Policy:
         )
         self.model.eval()
         self.use_proprio = bool(self.cfg["model"].get("use_proprio", True))
+        self.enhanced_proprio = bool(self.cfg["model"].get("enhanced_proprio", False))
+        if self.enhanced_proprio and not self.use_proprio:
+            raise ValueError("enhanced_proprio bundle requires proprio observations")
         self.history_steps = int(self.cfg["obs"]["history_steps"])
         self.image_size = int(self.cfg["obs"]["image_size"])
         self.camera_map = {
@@ -76,6 +80,9 @@ class Policy:
         self.seed = int(self.cfg.get("sampling", {}).get("seed", 42))
         self.execute_horizon = int(self.cfg["action"]["execute_horizon"])
         self._previous_action_normalized: torch.Tensor | None = None
+        self._last_raw_state: np.ndarray | None = None
+        self._last_joint_delta = np.zeros(13, dtype=np.float32)
+        self._last_action_context: np.ndarray | None = None
         self.calls = 0
 
     def _validate_bundle(self) -> None:
@@ -99,6 +106,7 @@ class Policy:
         )
         if stats_semantics != config_semantics:
             raise ValueError("bundle action config and stats semantics differ")
+        self.action_semantics = config_semantics
         if int(self.cfg["action"]["dim"]) != 13:
             raise ValueError("this rollout harness requires a 13-dimensional action")
         if len(self.cfg["joint_order"]) != 13:
@@ -172,6 +180,9 @@ class Policy:
             history.clear()
         self._state_history.clear()
         self._previous_action_normalized = None
+        self._last_raw_state = None
+        self._last_joint_delta = np.zeros(13, dtype=np.float32)
+        self._last_action_context = None
         self.calls = 0
 
     def _prepare_image(self, image: Any) -> torch.Tensor:
@@ -199,6 +210,35 @@ class Policy:
         span = np.maximum(np.asarray(stats["span"], dtype=np.float32), 1.0e-4)
         return np.clip(2.0 * (value - lo) / span - 1.0, -3.0, 3.0)
 
+    def _normalize_action(self, action: np.ndarray) -> np.ndarray:
+        stats = self.stats["action"]
+        lo = np.asarray(stats["min"], dtype=np.float32)
+        span = np.maximum(np.asarray(stats["span"], dtype=np.float32), 1.0e-4)
+        return np.clip(2.0 * (action - lo) / span - 1.0, -3.0, 3.0)
+
+    def record_executed_action(self, action: Any) -> None:
+        value = np.asarray(action, dtype=np.float32)
+        if value.shape != (13,) or not np.isfinite(value).all():
+            raise ValueError("executed action must contain 13 finite values")
+        self._last_action_context = value.copy()
+
+    def record_execution_feedback(self, action: Any, proprio: Any) -> None:
+        state = np.asarray(proprio, dtype=np.float32)
+        if state.shape != (13,) or not np.isfinite(state).all():
+            raise ValueError("execution feedback proprio must contain 13 finite values")
+        self.record_executed_action(action)
+        assert self._last_action_context is not None
+        if self.action_semantics == HYBRID_ACTION_SEMANTICS:
+            self._last_action_context[:7] = state[:7]
+        elif self.action_semantics == EXECUTED_ACTION_SEMANTICS:
+            self._last_action_context[:] = state
+        self._last_joint_delta = (
+            np.zeros(13, dtype=np.float32)
+            if self._last_raw_state is None
+            else state - self._last_raw_state
+        )
+        self._last_raw_state = state.copy()
+
     @torch.inference_mode()
     def infer(self, obs: dict[str, Any], *, execute_horizon: int | None = None) -> np.ndarray:
         images = obs.get("images")
@@ -208,10 +248,14 @@ class Policy:
             if sim_name not in images:
                 raise KeyError(f"missing rollout camera image: {sim_name}")
             self._history[model_key].append(self._prepare_image(images[sim_name]))
+        current_raw_state: np.ndarray | None = None
         if self.use_proprio:
             if "proprio" not in obs:
                 raise KeyError("missing proprio observation for a proprio-conditioned policy")
-            self._state_history.append(self._normalize_state(obs["proprio"]))
+            current_raw_state = np.asarray(obs["proprio"], dtype=np.float32)
+            if current_raw_state.shape != (13,) or not np.isfinite(current_raw_state).all():
+                raise ValueError("proprio must contain 13 finite values")
+            self._state_history.append(self._normalize_state(current_raw_state))
 
         model_obs: dict[str, torch.Tensor] = {}
         for model_key, history in self._history.items():
@@ -224,6 +268,40 @@ class Policy:
             model_obs["proprio"] = torch.from_numpy(
                 np.concatenate(list(self._state_history), axis=0)
             ).unsqueeze(0).to(self.device)
+        if self.enhanced_proprio:
+            assert current_raw_state is not None
+            if self._last_raw_state is None:
+                joint_delta = np.zeros(13, dtype=np.float32)
+            elif np.array_equal(current_raw_state, self._last_raw_state):
+                joint_delta = self._last_joint_delta
+            else:
+                joint_delta = current_raw_state - self._last_raw_state
+            previous_action = (
+                current_raw_state
+                if self._last_action_context is None
+                else self._last_action_context
+            )
+            state_span = np.maximum(
+                np.asarray(self.stats["state"]["span"], dtype=np.float32), 1.0e-4
+            )
+            action_span = np.maximum(
+                np.asarray(self.stats["action"]["span"], dtype=np.float32), 1.0e-4
+            )
+            hand_scale = np.maximum(state_span[7:], action_span[7:])
+            model_obs["joint_delta"] = torch.from_numpy(
+                np.clip(2.0 * joint_delta / state_span, -3.0, 3.0)
+            ).unsqueeze(0).to(self.device)
+            model_obs["previous_action"] = torch.from_numpy(
+                self._normalize_action(previous_action)
+            ).unsqueeze(0).to(self.device)
+            model_obs["hand_tracking_error"] = torch.from_numpy(
+                np.clip(
+                    2.0 * (previous_action[7:] - current_raw_state[7:]) / hand_scale,
+                    -3.0,
+                    3.0,
+                )
+            ).unsqueeze(0).to(self.device)
+            self._last_raw_state = current_raw_state.copy()
 
         devices = [self.device.index or 0] if self.device.type == "cuda" else []
         with torch.random.fork_rng(devices=devices):

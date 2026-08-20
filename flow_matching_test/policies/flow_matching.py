@@ -79,6 +79,7 @@ class FlowMatchingPolicy(ActionPolicy):
         timm_tokens_per_frame: int = 1,
         timm_token_mode: str = "spatial",
         use_proprio: bool = True,
+        enhanced_proprio: bool = False,
         history_steps: int,
         action_dim: int,
         action_horizon: int,
@@ -98,9 +99,12 @@ class FlowMatchingPolicy(ActionPolicy):
         self.time_eps = float(time_eps)
         self.num_inference_steps = int(num_inference_steps)
         self.use_proprio = bool(use_proprio)
+        self.enhanced_proprio = bool(enhanced_proprio)
 
         if not self.image_keys:
             raise ValueError("image_keys must not be empty")
+        if self.enhanced_proprio and not self.use_proprio:
+            raise ValueError("enhanced_proprio requires use_proprio=true")
         if not (0.0 <= self.time_eps < 1.0):
             raise ValueError("time_eps must be in [0,1)")
         if self.num_inference_steps <= 0:
@@ -143,6 +147,23 @@ class FlowMatchingPolicy(ActionPolicy):
         )
         self.final_norm = nn.LayerNorm(self.d_model)
         self.head = nn.Linear(self.d_model, self.action_dim)
+        self.joint_delta_proj = (
+            nn.Linear(self.action_dim, self.d_model) if self.enhanced_proprio else None
+        )
+        self.previous_action_proj = (
+            nn.Linear(self.action_dim, self.d_model) if self.enhanced_proprio else None
+        )
+        self.hand_tracking_error_proj = (
+            nn.Linear(6, self.d_model) if self.enhanced_proprio else None
+        )
+        for projection in (
+            self.joint_delta_proj,
+            self.previous_action_proj,
+            self.hand_tracking_error_proj,
+        ):
+            if projection is not None:
+                nn.init.zeros_(projection.weight)
+                nn.init.zeros_(projection.bias)
 
         self.register_buffer("action_mean", torch.zeros(self.action_dim), persistent=False)
         self.register_buffer("action_std", torch.ones(self.action_dim), persistent=False)
@@ -173,7 +194,24 @@ class FlowMatchingPolicy(ActionPolicy):
                     f"got {tuple(proprio.shape)}"
                 )
             assert self.proprio_proj is not None
-            cond_tokens = torch.cat([cond_tokens, self.proprio_proj(proprio).unsqueeze(1)], dim=1)
+            proprio_token = self.proprio_proj(proprio)
+            if self.enhanced_proprio:
+                enhanced = (
+                    ("joint_delta", self.action_dim, self.joint_delta_proj),
+                    ("previous_action", self.action_dim, self.previous_action_proj),
+                    ("hand_tracking_error", 6, self.hand_tracking_error_proj),
+                )
+                for name, dim, projection in enhanced:
+                    value = obs.get(name)
+                    if value is None:
+                        raise KeyError(f"Missing enhanced proprio observation: {name}")
+                    if value.ndim != 2 or value.shape[1] != dim:
+                        raise ValueError(
+                            f"{name} must have shape [B,{dim}], got {tuple(value.shape)}"
+                        )
+                    assert projection is not None
+                    proprio_token = proprio_token + projection(value)
+            cond_tokens = torch.cat([cond_tokens, proprio_token.unsqueeze(1)], dim=1)
         return cond_tokens + self.cond_pos[:, : cond_tokens.shape[1]]
 
     def forward(

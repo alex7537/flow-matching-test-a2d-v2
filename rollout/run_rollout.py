@@ -154,6 +154,7 @@ def run(
                     chunk = policy.infer(obs, execute_horizon=horizon)
                     for action in chunk[:horizon]:
                         obs = env.step(action)
+                        policy.record_execution_feedback(action, obs["proprio"])
                         checker.update(env.state())
                         if checker.done():
                             break

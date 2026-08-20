@@ -30,6 +30,7 @@ def _checkpoint(
     *,
     include_ema: bool = False,
     use_proprio: bool = True,
+    enhanced_proprio: bool = False,
     action_semantics: str = "executed_joint_position",
 ) -> None:
     policy_cfg = policy_cfg or {"type": "flow_matching"}
@@ -44,6 +45,7 @@ def _checkpoint(
         "model": {
             "encoder_type": "cnn",
             "use_proprio": use_proprio,
+            "enhanced_proprio": enhanced_proprio,
             "d_model": 16,
             "n_head": 4,
             "n_layer": 1,
@@ -195,6 +197,45 @@ def test_rgb_only_bundle_rollout_does_not_require_proprio(tmp_path: Path) -> Non
         }
     )
     assert action.shape == (4, 13)
+
+
+def test_enhanced_proprio_bundle_tracks_executed_action_context(tmp_path: Path) -> None:
+    ckpt = tmp_path / "best.ckpt"
+    bundle = tmp_path / "bundle"
+    _checkpoint(
+        ckpt,
+        enhanced_proprio=True,
+        action_semantics=HYBRID_ACTION_SEMANTICS,
+    )
+    export_eval_bundle(ckpt, bundle, execute_horizon=2)
+
+    exported_config = yaml.safe_load((bundle / "config.yaml").read_text())
+    assert exported_config["model"]["enhanced_proprio"] is True
+    assert exported_config["obs"]["enhanced_proprio_keys"] == [
+        "joint_delta",
+        "previous_action",
+        "hand_tracking_error",
+    ]
+    policy = Policy(bundle, device="cpu")
+    obs = {
+        "images": {
+            "rgb_head": np.zeros((24, 40, 3), dtype=np.uint8),
+            "rgb_right_hand": np.zeros((24, 40, 3), dtype=np.uint8),
+        },
+        "proprio": np.zeros(13, dtype=np.float32),
+    }
+    first = policy.infer(obs, execute_horizon=2)
+    feedback_state = np.full(13, 0.01, dtype=np.float32)
+    policy.record_execution_feedback(first[0], feedback_state)
+    obs["proprio"] = feedback_state
+    second = policy.infer(obs, execute_horizon=2)
+
+    assert first.shape == second.shape == (4, 13)
+    expected_context = first[0].copy()
+    expected_context[:7] = feedback_state[:7]
+    np.testing.assert_array_equal(policy._last_action_context, expected_context)
+    np.testing.assert_array_equal(policy._last_raw_state, obs["proprio"])
+    np.testing.assert_allclose(policy._last_joint_delta, [0.01] * 13)
 
 
 def test_bundle_can_export_ema_weights_with_explicit_provenance(tmp_path: Path) -> None:

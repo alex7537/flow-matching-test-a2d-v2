@@ -93,6 +93,7 @@ tail padded windows    train 14,715 / val 1,635
 6. action contract：dataset、stats、checkpoint、bundle、rollout 均校验 V2/V3 语义；
 7. `use_proprio` 开关：在完全相同预算下比较 RGB+proprio 与纯 RGB；
 8. deterministic validation、EMA、watchdog 和原子 checkpoint 保存。
+9. enhanced proprio：在原 qpos token 上零初始化叠加 joint delta、previous action 与 hand target-actual error，支持从 V3 best checkpoint 兼容 warm start。
 
 详细历史见 [`CHANGE.md`](CHANGE.md)。
 
@@ -110,6 +111,13 @@ python3 -u -m flow_matching_test.train \
 ```bash
 python3 -u -m flow_matching_test.train \
   --config configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_rgb_only_100ep_scratch.yaml
+```
+
+Enhanced proprio 20-epoch fine-tune：
+
+```bash
+python3 -u -m flow_matching_test.train \
+  --config configs/a2d_450gb_v3_enhanced_proprio_cfm_a800_20ep_init_best.yaml
 ```
 
 重要产物：
@@ -131,6 +139,7 @@ summary.json
 - [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：数据、padding、mask 与 oversampling；
 - [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR；
 - [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练与停止判断；
+- [`docs/ENHANCED_PROPRIO.md`](docs/ENHANCED_PROPRIO.md)：动态 proprio 输入、warm start 与训练预算；
 - [`artifacts_index.md`](artifacts_index.md)：外部训练和部署产物索引。
 
 训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git。
