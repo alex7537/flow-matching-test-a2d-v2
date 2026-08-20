@@ -14,6 +14,7 @@ from rollout.policy_wrapper import Policy
 from rollout.report import build_report
 from rollout.retry_controller import GraspRetryConfig, GraspRetryController
 from rollout.run_rollout import _bundle_provenance, _execute_trial, load_trials
+from rollout.sim_env import _recovery_joint_targets
 from rollout.success_checker import ThreePhaseChecker
 
 
@@ -322,7 +323,9 @@ class _RetryEnv:
     def __init__(self) -> None:
         self.attempt_index = 0
         self.step_index = 0
-        self.recovery_calls: list[tuple[int, tuple[float, ...] | None]] = []
+        self.recovery_calls: list[
+            tuple[int, int, int, tuple[float, ...] | None]
+        ] = []
         self.current = self._state(contact_count=0, object_height=0.0)
         self.sequences = [
             [
@@ -355,10 +358,14 @@ class _RetryEnv:
     def recover(
         self,
         *,
-        steps: int,
+        open_steps: int,
+        retreat_steps: int,
+        settle_steps: int,
         joint_positions: tuple[float, ...] | None,
     ) -> dict:
-        self.recovery_calls.append((steps, joint_positions))
+        self.recovery_calls.append(
+            (open_steps, retreat_steps, settle_steps, joint_positions)
+        )
         self.attempt_index += 1
         self.step_index = 0
         self.current = self._state(contact_count=0, object_height=0.0)
@@ -382,7 +389,9 @@ def test_task_grasp_retry_recovers_after_unconfirmed_contact() -> None:
         max_attempts=2,
         approach_timeout_steps=4,
         close_timeout_steps=1,
-        recovery_steps=3,
+        recovery_open_steps=1,
+        recovery_retreat_steps=2,
+        recovery_settle_steps=0,
         seed_stride=100,
     )
 
@@ -405,7 +414,10 @@ def test_task_grasp_retry_recovers_after_unconfirmed_contact() -> None:
     assert result["recovery_steps"] == 3
     assert result["attempts"][0]["retry_reason"] == "close_timeout"
     assert policy.reset_seeds == [7, 107]
-    assert env.recovery_calls == [(3, None)]
+    assert env.recovery_calls == [(1, 2, 0, None)]
+    report = build_report([result])["overall"]
+    assert report["retry_reasons"] == {"close_timeout": 1}
+    assert report["task_termination_reasons"] == {"success": 1}
 
 
 def test_task_grasp_retry_requires_safe_configuration() -> None:
@@ -421,6 +433,23 @@ def test_task_grasp_retry_requires_safe_configuration() -> None:
                 }
             }
         )
+
+
+def test_task_grasp_recovery_opens_hand_before_retreating_arm() -> None:
+    start = np.arange(13, dtype=np.float32)
+    target = start + 10.0
+    commands = _recovery_joint_targets(
+        start,
+        target,
+        open_steps=2,
+        retreat_steps=2,
+        settle_steps=1,
+    )
+
+    assert commands.shape == (5, 13)
+    np.testing.assert_array_equal(commands[:2, :7], np.repeat(start[None, :7], 2, axis=0))
+    np.testing.assert_array_equal(commands[1, 7:], target[7:])
+    np.testing.assert_array_equal(commands[-1], target)
 
 
 def test_task_grasp_retry_detects_approach_timeout() -> None:
@@ -445,6 +474,134 @@ def test_task_grasp_retry_detects_approach_timeout() -> None:
     checker.update(far_state)
     controller.observe(checker)
     assert controller.retry_reason(checker) == "approach_timeout"
+
+
+def test_task_grasp_retry_detects_contact_loss_and_lift_timeout() -> None:
+    criteria = {
+        "approach_distance_m": 0.1,
+        "close_contact_count": 2,
+        "close_hold_steps": 1,
+    }
+    contact_loss_checker = ThreePhaseChecker(criteria)
+    contact_loss_controller = GraspRetryController(
+        GraspRetryConfig(
+            enabled=True,
+            max_attempts=2,
+            contact_loss_hold_steps=2,
+            lift_timeout_steps=10,
+        )
+    )
+    contact_loss_controller.begin_attempt(0)
+    closed_state = {
+        "object_position": [0.0, 0.0, 0.0],
+        "eef_position": [0.0, 0.0, 0.05],
+        "contact_count": 2,
+    }
+    lost_state = {**closed_state, "contact_count": 0}
+    contact_loss_checker.update(closed_state)
+    contact_loss_controller.observe(contact_loss_checker)
+    contact_loss_checker.update(lost_state)
+    assert contact_loss_controller.retry_reason(contact_loss_checker) is None
+    contact_loss_checker.update(lost_state)
+    assert (
+        contact_loss_controller.retry_reason(contact_loss_checker)
+        == "contact_lost_after_close"
+    )
+
+    lift_checker = ThreePhaseChecker(criteria)
+    lift_controller = GraspRetryController(
+        GraspRetryConfig(
+            enabled=True,
+            max_attempts=2,
+            contact_loss_hold_steps=2,
+            lift_timeout_steps=2,
+        )
+    )
+    lift_controller.begin_attempt(0)
+    for _ in range(3):
+        lift_checker.update(closed_state)
+        lift_controller.observe(lift_checker)
+    assert lift_controller.retry_reason(lift_checker) == "lift_timeout"
+
+
+def test_task_grasp_retry_enforces_total_policy_step_budget() -> None:
+    class FarEnv:
+        def __init__(self) -> None:
+            self.current = {
+                "object_position": [0.0, 0.0, 0.0],
+                "eef_position": [1.0, 0.0, 0.0],
+                "contact_count": 0,
+            }
+
+        def state(self) -> dict:
+            return self.current
+
+        def step(self, action: np.ndarray) -> dict:
+            return {"images": {}}
+
+        def recover(self, **kwargs: object) -> dict:
+            raise AssertionError("task budget exhaustion must not start another attempt")
+
+    result = _execute_trial(
+        policy=_RetryPolicy(),
+        env=FarEnv(),
+        checker=ThreePhaseChecker({"approach_distance_m": 0.1}),
+        obs={"images": {}},
+        horizon=2,
+        max_chunks=10,
+        base_seed=7,
+        retry_config=GraspRetryConfig(
+            enabled=True,
+            max_attempts=2,
+            approach_timeout_steps=100,
+            close_timeout_steps=100,
+            max_total_policy_steps=3,
+        ),
+    )
+
+    assert result["success"] is False
+    assert result["steps"] == 3
+    assert result["attempt_count"] == 1
+    assert result["attempts"][0]["retry_reason"] == "task_step_budget_exhausted"
+    assert result["task_termination_reason"] == "task_step_budget_exhausted"
+
+
+def test_task_grasp_retry_retries_when_lift_attempt_budget_ends() -> None:
+    class ClosedEnv(_RetryEnv):
+        def __init__(self) -> None:
+            super().__init__()
+            closed = self._state(contact_count=2, object_height=0.0)
+            lifted = self._state(contact_count=2, object_height=0.03)
+            self.sequences = [[closed], [closed, lifted]]
+
+    result = _execute_trial(
+        policy=_RetryPolicy(),
+        env=ClosedEnv(),
+        checker=ThreePhaseChecker(
+            {
+                "approach_distance_m": 0.1,
+                "close_contact_count": 2,
+                "close_hold_steps": 1,
+                "lift_height_m": 0.02,
+                "lift_hold_steps": 1,
+            }
+        ),
+        obs={"images": {}},
+        horizon=1,
+        max_chunks=2,
+        base_seed=7,
+        retry_config=GraspRetryConfig(
+            enabled=True,
+            max_attempts=2,
+            recovery_open_steps=1,
+            recovery_retreat_steps=1,
+            recovery_settle_steps=0,
+        ),
+    )
+
+    assert result["success"] is True
+    assert result["attempt_count"] == 2
+    assert result["attempts"][0]["retry_reason"] == "lift_attempt_budget_exhausted"
 
 
 def test_bundle_provenance_maps_manifest_fields() -> None:

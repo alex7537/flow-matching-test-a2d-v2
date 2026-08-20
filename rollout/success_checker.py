@@ -24,6 +24,9 @@ class ThreePhaseChecker:
         self.lifted = False
         self.close_streak = 0
         self.lift_streak = 0
+        self.contact_loss_streak = 0
+        self.current_contact_count = 0
+        self.closed_at_step: int | None = None
         self.steps = 0
         self.initial_object_height: float | None = None
         self.max_height_gain = 0.0
@@ -45,11 +48,18 @@ class ThreePhaseChecker:
             self.approached = True
 
         contacts = int(state.get("contact_count", 0))
+        self.current_contact_count = contacts
         if self.approached and contacts >= self.close_contact_count:
             self.close_streak += 1
         else:
             self.close_streak = 0
-        self.closed = self.closed or self.close_streak >= self.close_hold_steps
+        if not self.closed and self.close_streak >= self.close_hold_steps:
+            self.closed = True
+            self.closed_at_step = self.steps
+        if self.closed and contacts < self.close_contact_count:
+            self.contact_loss_streak += 1
+        else:
+            self.contact_loss_streak = 0
 
         height_gain = float(object_position[2]) - self.initial_object_height
         self.max_height_gain = max(self.max_height_gain, height_gain)
@@ -79,4 +89,6 @@ class ThreePhaseChecker:
             "failure_stage": failure_stage,
             "steps": self.steps,
             "max_height_gain_m": self.max_height_gain,
+            "current_contact_count": self.current_contact_count,
+            "contact_loss_streak": self.contact_loss_streak,
         }

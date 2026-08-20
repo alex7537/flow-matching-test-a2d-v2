@@ -12,7 +12,12 @@ class GraspRetryConfig:
     max_attempts: int = 1
     approach_timeout_steps: int = 96
     close_timeout_steps: int = 64
-    recovery_steps: int = 30
+    lift_timeout_steps: int = 96
+    contact_loss_hold_steps: int = 5
+    max_total_policy_steps: int = 512
+    recovery_open_steps: int = 10
+    recovery_retreat_steps: int = 30
+    recovery_settle_steps: int = 5
     seed_stride: int = 100_003
     recovery_joint_positions: tuple[float, ...] | None = None
 
@@ -34,7 +39,12 @@ class GraspRetryConfig:
             max_attempts=int(raw.get("max_attempts", 2 if enabled else 1)),
             approach_timeout_steps=int(raw.get("approach_timeout_steps", 96)),
             close_timeout_steps=int(raw.get("close_timeout_steps", 64)),
-            recovery_steps=int(raw.get("recovery_steps", 30)),
+            lift_timeout_steps=int(raw.get("lift_timeout_steps", 96)),
+            contact_loss_hold_steps=int(raw.get("contact_loss_hold_steps", 5)),
+            max_total_policy_steps=int(raw.get("max_total_policy_steps", 512)),
+            recovery_open_steps=int(raw.get("recovery_open_steps", 10)),
+            recovery_retreat_steps=int(raw.get("recovery_retreat_steps", 30)),
+            recovery_settle_steps=int(raw.get("recovery_settle_steps", 5)),
             seed_stride=int(raw.get("seed_stride", 100_003)),
             recovery_joint_positions=recovery_joint_positions,
         )
@@ -48,8 +58,18 @@ class GraspRetryConfig:
             raise ValueError("task_grasp_retry.approach_timeout_steps must be positive")
         if self.close_timeout_steps < 1:
             raise ValueError("task_grasp_retry.close_timeout_steps must be positive")
-        if self.recovery_steps < 1:
-            raise ValueError("task_grasp_retry.recovery_steps must be positive")
+        if self.lift_timeout_steps < 1:
+            raise ValueError("task_grasp_retry.lift_timeout_steps must be positive")
+        if self.contact_loss_hold_steps < 1:
+            raise ValueError("task_grasp_retry.contact_loss_hold_steps must be positive")
+        if self.max_total_policy_steps < 1:
+            raise ValueError("task_grasp_retry.max_total_policy_steps must be positive")
+        if self.recovery_open_steps < 1:
+            raise ValueError("task_grasp_retry.recovery_open_steps must be positive")
+        if self.recovery_retreat_steps < 1:
+            raise ValueError("task_grasp_retry.recovery_retreat_steps must be positive")
+        if self.recovery_settle_steps < 0:
+            raise ValueError("task_grasp_retry.recovery_settle_steps must be non-negative")
         if self.seed_stride < 1:
             raise ValueError("task_grasp_retry.seed_stride must be positive")
 
@@ -82,7 +102,16 @@ class GraspRetryController:
             self.approached_at_step = int(checker.steps)
 
     def retry_reason(self, checker: Any) -> str | None:
-        if not self.config.enabled or checker.done() or checker.closed:
+        if not self.config.enabled or checker.done():
+            return None
+        if checker.closed:
+            if int(checker.contact_loss_streak) >= self.config.contact_loss_hold_steps:
+                return "contact_lost_after_close"
+            if checker.closed_at_step is not None and (
+                int(checker.steps) - int(checker.closed_at_step)
+                >= self.config.lift_timeout_steps
+            ):
+                return "lift_timeout"
             return None
         if self.approached_at_step is None:
             if int(checker.steps) >= self.config.approach_timeout_steps:
@@ -94,3 +123,11 @@ class GraspRetryController:
 
     def can_retry(self) -> bool:
         return self.config.enabled and self.attempt_index + 1 < self.config.attempt_limit
+
+    @property
+    def recovery_steps(self) -> int:
+        return (
+            self.config.recovery_open_steps
+            + self.config.recovery_retreat_steps
+            + self.config.recovery_settle_steps
+        )

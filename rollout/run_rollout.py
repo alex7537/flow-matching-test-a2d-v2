@@ -100,6 +100,7 @@ def _execute_trial(
     controller = GraspRetryController(retry_config)
     attempts: list[dict[str, Any]] = []
     recovery_steps_total = 0
+    total_policy_steps = 0
 
     for attempt_index in range(retry_config.attempt_limit):
         controller.begin_attempt(attempt_index)
@@ -111,9 +112,22 @@ def _execute_trial(
         retry_reason = None
 
         for _ in range(max_chunks):
+            if (
+                retry_config.enabled
+                and total_policy_steps >= retry_config.max_total_policy_steps
+            ):
+                retry_reason = "task_step_budget_exhausted"
+                break
             chunk = policy.infer(obs, execute_horizon=horizon)
             for action in chunk[:horizon]:
+                if (
+                    retry_config.enabled
+                    and total_policy_steps >= retry_config.max_total_policy_steps
+                ):
+                    retry_reason = "task_step_budget_exhausted"
+                    break
                 obs = env.step(action)
+                total_policy_steps += 1
                 checker.update(env.state())
                 controller.observe(checker)
                 if checker.done():
@@ -127,27 +141,37 @@ def _execute_trial(
         if (
             retry_config.enabled
             and not checker.done()
-            and not checker.closed
             and retry_reason is None
         ):
-            retry_reason = "attempt_budget_exhausted"
+            retry_reason = (
+                "lift_attempt_budget_exhausted"
+                if checker.closed
+                else "attempt_budget_exhausted"
+            )
 
         attempt_summary = {
             "attempt_index": attempt_index,
             "sampling_seed": attempt_seed,
             **checker.summary(),
             "retry_reason": retry_reason,
-            "retry_performed": bool(retry_reason is not None and controller.can_retry()),
+            "retry_performed": bool(
+                retry_reason is not None
+                and retry_reason != "task_step_budget_exhausted"
+                and controller.can_retry()
+            ),
+            "task_policy_step_end": total_policy_steps,
         }
         attempts.append(attempt_summary)
 
         if checker.done() or not attempt_summary["retry_performed"]:
             break
         obs = env.recover(
-            steps=retry_config.recovery_steps,
+            open_steps=retry_config.recovery_open_steps,
+            retreat_steps=retry_config.recovery_retreat_steps,
+            settle_steps=retry_config.recovery_settle_steps,
             joint_positions=retry_config.recovery_joint_positions,
         )
-        recovery_steps_total += retry_config.recovery_steps
+        recovery_steps_total += controller.recovery_steps
 
     final = checker.summary()
     final_attempt_steps = int(final["steps"])
@@ -160,6 +184,12 @@ def _execute_trial(
             "first_attempt_success": bool(attempts and attempts[0]["success"]),
             "recovered_success": bool(final["success"] and len(attempts) > 1),
             "recovery_steps": recovery_steps_total,
+            "total_control_steps": total_policy_steps + recovery_steps_total,
+            "task_termination_reason": (
+                "success"
+                if final["success"]
+                else attempts[-1].get("retry_reason") or final.get("failure_stage")
+            ),
             "attempts": attempts,
         }
     )

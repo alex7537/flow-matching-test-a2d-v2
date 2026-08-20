@@ -6,6 +6,37 @@ from typing import Any
 import numpy as np
 
 
+def _recovery_joint_targets(
+    start: np.ndarray,
+    target: np.ndarray,
+    *,
+    open_steps: int,
+    retreat_steps: int,
+    settle_steps: int,
+) -> np.ndarray:
+    start = np.asarray(start, dtype=np.float32)
+    target = np.asarray(target, dtype=np.float32)
+    if start.shape != (13,) or target.shape != (13,):
+        raise ValueError("recovery start and target must have shape (13,)")
+    if not np.isfinite(start).all() or not np.isfinite(target).all():
+        raise ValueError("recovery start and target must be finite")
+    if open_steps < 1 or retreat_steps < 1 or settle_steps < 0:
+        raise ValueError("recovery open/retreat steps must be positive and settle non-negative")
+
+    hand_open = start.copy()
+    hand_open[7:] = target[7:]
+    commands = [
+        start + (float(index) / float(open_steps)) * (hand_open - start)
+        for index in range(1, open_steps + 1)
+    ]
+    commands.extend(
+        hand_open + (float(index) / float(retreat_steps)) * (target - hand_open)
+        for index in range(1, retreat_steps + 1)
+    )
+    commands.extend(target.copy() for _ in range(settle_steps))
+    return np.asarray(commands, dtype=np.float32)
+
+
 class GraspEnv:
     """Thin Isaac Sim adapter; construct only after SimulationApp exists."""
 
@@ -141,12 +172,12 @@ class GraspEnv:
     def recover(
         self,
         *,
-        steps: int,
+        open_steps: int,
+        retreat_steps: int,
+        settle_steps: int,
         joint_positions: tuple[float, ...] | None = None,
     ) -> dict[str, Any]:
-        """Move smoothly to a configured safe pregrasp state without resetting the object."""
-        if steps < 1:
-            raise ValueError("recovery steps must be positive")
+        """Open the hand, retreat to pregrasp, then settle without resetting the object."""
         target = np.asarray(
             self.current_initial_joint_positions if joint_positions is None else joint_positions,
             dtype=np.float32,
@@ -155,10 +186,16 @@ class GraspEnv:
             raise ValueError("recovery joint positions must contain 13 finite values")
         all_positions = np.asarray(self.robot.get_joint_positions(), dtype=np.float32)
         start = all_positions[self.joint_indices].copy()
+        commands = _recovery_joint_targets(
+            start,
+            target,
+            open_steps=open_steps,
+            retreat_steps=retreat_steps,
+            settle_steps=settle_steps,
+        )
         obs: dict[str, Any] | None = None
-        for step_index in range(1, steps + 1):
-            alpha = float(step_index) / float(steps)
-            obs = self.step(start + alpha * (target - start))
+        for command in commands:
+            obs = self.step(command)
         assert obs is not None
         return obs
 

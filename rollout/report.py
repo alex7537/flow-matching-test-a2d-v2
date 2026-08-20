@@ -17,6 +17,12 @@ def build_report(
 
     def summarize(items: list[dict[str, Any]]) -> dict[str, Any]:
         count = len(items)
+        attempt_records = [
+            attempt
+            for item in items
+            for attempt in item.get("attempts", [])
+            if isinstance(attempt, dict)
+        ]
         return {
             "trials": count,
             "success_rate": sum(bool(item["success"]) for item in items) / count,
@@ -31,6 +37,26 @@ def build_report(
             "retry_rate": sum(int(item.get("retry_count", 0)) > 0 for item in items) / count,
             "mean_attempt_count": sum(int(item.get("attempt_count", 1)) for item in items)
             / count,
+            "mean_policy_steps": sum(int(item.get("steps", 0)) for item in items) / count,
+            "mean_recovery_steps": sum(int(item.get("recovery_steps", 0)) for item in items)
+            / count,
+            "mean_total_control_steps": sum(
+                int(item.get("total_control_steps", item.get("steps", 0))) for item in items
+            )
+            / count,
+            "retry_reasons": dict(
+                Counter(
+                    str(attempt["retry_reason"])
+                    for attempt in attempt_records
+                    if attempt.get("retry_reason")
+                )
+            ),
+            "task_termination_reasons": dict(
+                Counter(
+                    str(item.get("task_termination_reason") or item.get("failure_stage") or "success")
+                    for item in items
+                )
+            ),
             "approach_rate": sum(bool(item["approach_success"]) for item in items) / count,
             "close_rate": sum(bool(item["close_success"]) for item in items) / count,
             "lift_rate": sum(bool(item["lift_success"]) for item in items) / count,
