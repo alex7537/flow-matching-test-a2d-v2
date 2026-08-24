@@ -36,6 +36,9 @@ def materialize_policy_config(policy_cfg: Mapping[str, Any] | None) -> dict[str,
     elif policy_type == "diffusion":
         config.setdefault("diffusion_train_steps", 100)
         config.setdefault("diffusion_inference_steps", 15)
+        config.setdefault("diffusion_beta_schedule", "cosine")
+        config.setdefault("diffusion_beta_start", 1.0e-4)
+        config.setdefault("diffusion_beta_end", 2.0e-2)
     return config
 
 
@@ -124,5 +127,14 @@ def build_policy(
             time_eps=float(model_cfg.get("time_eps", 1.0e-3)),
             diffusion_train_steps=int(policy_cfg.get("diffusion_train_steps", 100)),
             diffusion_inference_steps=int(policy_cfg.get("diffusion_inference_steps", 15)),
+            diffusion_beta_schedule=str(
+                policy_cfg.get("diffusion_beta_schedule", "cosine")
+            ),
+            diffusion_beta_start=float(
+                policy_cfg.get("diffusion_beta_start", 1.0e-4)
+            ),
+            diffusion_beta_end=float(
+                policy_cfg.get("diffusion_beta_end", 2.0e-2)
+            ),
         )
     raise AssertionError(f"Unhandled policy type: {policy_type}")

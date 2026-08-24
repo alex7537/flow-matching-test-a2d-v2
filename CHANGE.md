@@ -2,6 +2,14 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-08-24｜V3 Diffusion scaled-linear 正式基线准备
+
+- 为 DP/RS-IMLE 补齐按 val sample 固定的 loss/sampling RNG，避免随机验证影响 best checkpoint 选择。
+- DP 新增 scaled-linear beta schedule：100步实际 beta 为 0.001→0.2，terminal alpha_bar 约2.04e-5；保留 cosine 作为兼容默认值。
+- DP 新增 low/mid/high timestep epsilon loss、predicted-x0 MSE 与 clamp fraction 日志。
+- CFM/DDIM 迭代采样改为每个 action chunk 只编码一次 observation，避免重复 ViT 前向。
+- 新增与 V3 CFM 完全对齐的100-epoch DP配置和专项说明。
+
 ## 2026-08-20｜V3 enhanced-proprio fine-tune 路线
 
 - 在现有 actual qpos token 上增加 `joint_delta(13)`、`previous_action(13)` 与 `hand_tracking_error(6)` 三个零初始化投影；训练标签仍从 `action[t+1]` 开始，不读取未来信息。

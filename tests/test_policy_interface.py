@@ -183,6 +183,93 @@ def test_seeded_cfm_validation_is_reproducible() -> None:
         assert first[key] == pytest.approx(second[key], rel=1.0e-5, abs=1.0e-7)
 
 
+@pytest.mark.parametrize(
+    "policy_cfg",
+    [
+        {
+            "type": "imle",
+            "n_samples_per_condition": 3,
+            "rs_imle_epsilon": 0.0,
+        },
+        {
+            "type": "diffusion",
+            "diffusion_train_steps": 10,
+            "diffusion_inference_steps": 3,
+            "diffusion_beta_schedule": "scaled_linear",
+        },
+    ],
+)
+def test_seeded_stochastic_policy_validation_is_reproducible(policy_cfg) -> None:
+    policy = _policy(policy_cfg)
+    batch = _batch()
+    batch["sample_index"] = torch.tensor([3, 9])
+
+    first = evaluate(
+        model=policy,
+        loader=[batch],
+        device=torch.device("cpu"),
+        deterministic_seed=42,
+        sample_draws=3,
+    )
+    torch.manual_seed(999)
+    second = evaluate(
+        model=policy,
+        loader=[batch],
+        device=torch.device("cpu"),
+        deterministic_seed=42,
+        sample_draws=3,
+    )
+
+    assert first.keys() == second.keys()
+    for key in first:
+        assert first[key] == pytest.approx(second[key], rel=1.0e-5, abs=1.0e-7)
+
+
+def test_scaled_linear_diffusion_schedule_and_monitoring() -> None:
+    policy = _policy(
+        {
+            "type": "diffusion",
+            "diffusion_train_steps": 100,
+            "diffusion_inference_steps": 15,
+            "diffusion_beta_schedule": "scaled_linear",
+            "diffusion_beta_start": 1.0e-4,
+            "diffusion_beta_end": 2.0e-2,
+        }
+    )
+    assert isinstance(policy, DiffusionPolicy)
+    assert torch.all(policy.betas[1:] >= policy.betas[:-1])
+    assert 1.0e-6 < float(policy.alpha_bars[-1]) < 1.0e-3
+
+    _, metrics = policy.compute_loss(_batch())
+    assert metrics["pred_x0_mse"] is not None
+    assert 0.0 <= metrics["pred_x0_clamp_fraction"] <= 1.0
+    assert any(
+        metrics[f"epsilon_loss_{name}_t"] is not None
+        for name in ("low", "mid", "high")
+    )
+
+
+def test_iterative_samplers_encode_observation_once() -> None:
+    for policy_cfg in (
+        {"type": "flow_matching"},
+        {
+            "type": "diffusion",
+            "diffusion_train_steps": 10,
+            "diffusion_inference_steps": 3,
+        },
+    ):
+        policy = _policy(policy_cfg)
+        calls = []
+        handle = policy.obs_composer.register_forward_hook(
+            lambda *_args: calls.append(1)
+        )
+        try:
+            policy.sample_actions(_batch()["obs"])
+        finally:
+            handle.remove()
+        assert len(calls) == 1
+
+
 def test_frozen_backbone_is_excluded_from_optimizer_groups() -> None:
     policy = _policy()
     backbone = policy.backbone_parameters()

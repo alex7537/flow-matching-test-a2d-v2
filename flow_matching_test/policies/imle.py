@@ -188,9 +188,11 @@ class ImlePolicy(ActionPolicy):
         batch_indices = torch.arange(candidates.shape[0], device=candidates.device)
         return candidates[batch_indices, selected_indices]
 
-    def compute_loss(
+    def _compute_loss_with_latent(
         self,
         batch: dict[str, torch.Tensor | dict[str, torch.Tensor]],
+        *,
+        latent: torch.Tensor,
     ) -> tuple[torch.Tensor, dict[str, float | None]]:
         clean_action = batch["action"]
         obs = batch["obs"]
@@ -198,13 +200,6 @@ class ImlePolicy(ActionPolicy):
             raise TypeError("batch must contain tensor action and dict obs")
         batch_size = clean_action.shape[0]
         cond_tokens = self._encode_obs(obs)
-        latent = torch.randn(
-            batch_size * self.n_samples_per_condition,
-            self.action_horizon,
-            self.action_dim,
-            device=clean_action.device,
-            dtype=clean_action.dtype,
-        )
         repeated_cond = cond_tokens.repeat_interleave(self.n_samples_per_condition, dim=0)
         candidates = self._generate(latent, repeated_cond).reshape(
             batch_size,
@@ -249,6 +244,53 @@ class ImlePolicy(ActionPolicy):
             **segment_losses,
         }
 
+    def compute_loss(
+        self,
+        batch: dict[str, torch.Tensor | dict[str, torch.Tensor]],
+    ) -> tuple[torch.Tensor, dict[str, float | None]]:
+        clean_action = batch["action"]
+        if not isinstance(clean_action, torch.Tensor):
+            raise TypeError("batch['action'] must be a tensor")
+        latent = torch.randn(
+            clean_action.shape[0] * self.n_samples_per_condition,
+            self.action_horizon,
+            self.action_dim,
+            device=clean_action.device,
+            dtype=clean_action.dtype,
+        )
+        return self._compute_loss_with_latent(batch, latent=latent)
+
+    def compute_loss_seeded(
+        self,
+        batch: dict[str, torch.Tensor | dict[str, torch.Tensor]],
+        seeds: list[int],
+    ) -> tuple[torch.Tensor, dict[str, float | None]]:
+        clean_action = batch["action"]
+        if not isinstance(clean_action, torch.Tensor):
+            raise TypeError("batch['action'] must be a tensor")
+        if len(seeds) != int(clean_action.shape[0]):
+            raise ValueError("validation seed count must match batch size")
+        rows = []
+        for seed in seeds:
+            generator = torch.Generator(device=clean_action.device)
+            generator.manual_seed(int(seed))
+            rows.append(
+                torch.randn(
+                    (
+                        self.n_samples_per_condition,
+                        self.action_horizon,
+                        self.action_dim,
+                    ),
+                    device=clean_action.device,
+                    dtype=clean_action.dtype,
+                    generator=generator,
+                )
+            )
+        return self._compute_loss_with_latent(
+            batch,
+            latent=torch.cat(rows, dim=0),
+        )
+
     @torch.no_grad()
     def sample_actions(self, obs: dict[str, torch.Tensor]) -> SamplingResult:
         batch_size = int(obs[self.image_keys[0]].shape[0])
@@ -260,6 +302,36 @@ class ImlePolicy(ActionPolicy):
             dtype=obs[self.image_keys[0]].dtype,
         )
         normalized = self._generate(latent, self._encode_obs(obs))
+        return SamplingResult(
+            action_normalized=normalized,
+            action=self.denormalize_action(normalized),
+        )
+
+    @torch.no_grad()
+    def sample_actions_seeded(
+        self,
+        obs: dict[str, torch.Tensor],
+        seeds: list[int],
+    ) -> SamplingResult:
+        anchor = obs[self.image_keys[0]]
+        if len(seeds) != int(anchor.shape[0]):
+            raise ValueError("validation seed count must match batch size")
+        rows = []
+        for seed in seeds:
+            generator = torch.Generator(device=anchor.device)
+            generator.manual_seed(int(seed))
+            rows.append(
+                torch.randn(
+                    (1, self.action_horizon, self.action_dim),
+                    device=anchor.device,
+                    dtype=anchor.dtype,
+                    generator=generator,
+                )
+            )
+        normalized = self._generate(
+            torch.cat(rows, dim=0),
+            self._encode_obs(obs),
+        )
         return SamplingResult(
             action_normalized=normalized,
             action=self.denormalize_action(normalized),

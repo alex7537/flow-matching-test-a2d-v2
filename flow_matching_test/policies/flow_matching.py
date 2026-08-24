@@ -221,7 +221,19 @@ class FlowMatchingPolicy(ActionPolicy):
         obs: dict[str, torch.Tensor],
         timesteps: torch.Tensor,
     ) -> torch.Tensor:
-        cond_tokens = self._encode_obs(obs)
+        return self._predict_from_cond_tokens(
+            noisy_action=noisy_action,
+            cond_tokens=self._encode_obs(obs),
+            timesteps=timesteps,
+        )
+
+    def _predict_from_cond_tokens(
+        self,
+        *,
+        noisy_action: torch.Tensor,
+        cond_tokens: torch.Tensor,
+        timesteps: torch.Tensor,
+    ) -> torch.Tensor:
         action_tokens = self.action_proj(noisy_action) + self.action_pos[:, : noisy_action.shape[1]]
         time_tokens = self.time_embed(timesteps.float()).unsqueeze(1)
         x = action_tokens + time_tokens
@@ -330,11 +342,16 @@ class FlowMatchingPolicy(ActionPolicy):
     ) -> SamplingResult:
         batch_size = int(action.shape[0])
         anchor = next(iter(obs.values()))
+        cond_tokens = self._encode_obs(obs)
         dt = (1.0 - self.time_eps) / float(self.num_inference_steps)
         for step_idx in range(self.num_inference_steps):
             t_value = self.time_eps + dt * float(step_idx)
             timestep = torch.full((batch_size,), t_value, device=anchor.device, dtype=torch.float32)
-            pred_velocity = self(noisy_action=action, obs=obs, timesteps=timestep).to(action.dtype)
+            pred_velocity = self._predict_from_cond_tokens(
+                noisy_action=action,
+                cond_tokens=cond_tokens,
+                timesteps=timestep,
+            ).to(action.dtype)
             action = action + pred_velocity * dt
         action_normalized = action.float()
         action_unnormalized = self.denormalize_action(action_normalized)

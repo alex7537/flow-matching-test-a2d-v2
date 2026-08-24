@@ -140,6 +140,7 @@ summary.json
 - [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR；
 - [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练与停止判断；
 - [`docs/ENHANCED_PROPRIO.md`](docs/ENHANCED_PROPRIO.md)：动态 proprio 输入、warm start 与训练预算；
+- [`docs/V3_DIFFUSION_SCALED_LINEAR.md`](docs/V3_DIFFUSION_SCALED_LINEAR.md)：V3 DP scaled-linear schedule、监控与匹配预算；
 - [`artifacts_index.md`](artifacts_index.md)：外部训练和部署产物索引。
 
 训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git。

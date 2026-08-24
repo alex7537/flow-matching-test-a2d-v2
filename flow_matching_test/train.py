@@ -35,7 +35,6 @@ from flow_matching_test.policies.factory import (
     materialize_policy_config,
     resolve_policy_type,
 )
-from flow_matching_test.policies.flow_matching import FlowMatchingPolicy
 from flow_matching_test.rerun_logger import RerunTrainVisualizer
 from flow_matching_test.segmentation import SEGMENTATION_VERSION
 from flow_matching_test.training_watchdog import StallDetails, TrainingWatchdog
@@ -430,8 +429,9 @@ def evaluate(
         else:
             indices = []
             loss_seeds = []
-        if deterministic_seed is not None and type(model) is FlowMatchingPolicy:
-            loss, components = model.compute_loss_seeded(batch, loss_seeds)
+        seeded_loss = getattr(model, "compute_loss_seeded", None)
+        if deterministic_seed is not None and callable(seeded_loss):
+            loss, components = seeded_loss(batch, loss_seeds)
         else:
             loss, components = model.compute_loss(batch)
         losses.append(float(loss.detach().item()))
@@ -440,7 +440,8 @@ def evaluate(
                 component_values[name].append(float(value))
         draw_mse = []
         for draw in range(sample_draws):
-            if deterministic_seed is not None and type(model) is FlowMatchingPolicy:
+            seeded_sample = getattr(model, "sample_actions_seeded", None)
+            if deterministic_seed is not None and callable(seeded_sample):
                 sample_seeds = [
                     (
                         int(deterministic_seed) * 1_000_003
@@ -450,7 +451,7 @@ def evaluate(
                     % (2**63 - 1)
                     for index in indices
                 ]
-                sampled = model.sample_actions_seeded(batch["obs"], sample_seeds).action_normalized
+                sampled = seeded_sample(batch["obs"], sample_seeds).action_normalized
             else:
                 sampled = _sample_normalized_actions(model, batch)
             action_mask = batch.get("action_mask")
@@ -532,8 +533,6 @@ def main() -> None:
     validation_cfg["sample_draws"] = int(validation_cfg.get("sample_draws", 3))
     if validation_cfg["sample_draws"] < 1:
         raise ValueError("validation.sample_draws must be >= 1")
-    if validation_cfg["deterministic"] and policy_type != "flow_matching":
-        raise ValueError("deterministic validation is currently implemented only for flow_matching")
     training_cfg["ema_enabled"] = bool(training_cfg.get("ema_enabled", True))
     training_cfg["ema_decay"] = float(training_cfg.get("ema_decay", 0.999))
     if not 0.0 <= training_cfg["ema_decay"] < 1.0:
