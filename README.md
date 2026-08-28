@@ -136,6 +136,7 @@ summary.json
 ## 文档
 
 - [`CHANGE.md`](CHANGE.md)：倒序更新记录；
+- [`docs/RTC_EXECUTE_HORIZON_PLAN.md`](docs/RTC_EXECUTE_HORIZON_PLAN.md)：RTC 跨 chunk 连续性、异步推理与动态 execute horizon 的分阶段方案；
 - [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：数据、padding、mask 与 oversampling；
 - [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR；
 - [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练与停止判断；

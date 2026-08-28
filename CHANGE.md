@@ -2,6 +2,12 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-08-28｜增加 RTC execute-horizon 改进方案
+
+- 新增 `docs/RTC_EXECUTE_HORIZON_PLAN.md`，记录 H4/H8/H16 诊断证据、chunk boundary jump 定义、固定 latent 探针、旧 chunk suffix 条件化、RTC soft guidance、异步远端推理与 phase-aware horizon 的分阶段路线。
+- 方案冻结“先测量、再连续性、后异步”的实施顺序，并要求按 arm/hand 分解边界 jump、jerk、接触、持续抬升、最终保持和实际控制 cadence。
+- 本次仅增加设计与验收合同，尚未修改 CFM 采样、rollout 执行或训练行为。
+
 ## 2026-08-28｜README 增加 100 段成功抓取 10×10 展示
 
 - 从 v17 四模型成功视频中均衡选择 100 段严格 10cm 成功样本，每个模型 25 段，每个模型内包含 H4×8、H8×8、H16×9。
