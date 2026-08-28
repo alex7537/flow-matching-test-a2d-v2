@@ -1,0 +1,1140 @@
+{
+  "schema_version": 1,
+  "source_collection": "a2d_hand_funnel_v17_four_model_horizon_4_8_16_5f_success_videos",
+  "selection": {
+    "success_tier": "10cm",
+    "models": {
+      "best_ema": 25,
+      "epoch100_raw": 25,
+      "latest_raw": 25,
+      "rgb_only_final_raw": 25
+    },
+    "horizons_per_model": {
+      "4": 8,
+      "8": 8,
+      "16": 9
+    },
+    "method": "evenly spaced by episode within each model/horizon category"
+  },
+  "render": {
+    "layout": "10x10",
+    "quadrants": {
+      "top_left": "best_ema",
+      "top_right": "epoch100_raw",
+      "bottom_left": "latest_raw",
+      "bottom_right": "rgb_only_final_raw"
+    },
+    "horizon_border_colors": {
+      "4": "0x3b82f6",
+      "8": "0x22c55e",
+      "16": "0xf59e0b"
+    },
+    "start_seconds": 0.5,
+    "duration_seconds": 6.0,
+    "fps": 5,
+    "width": 960,
+    "height": 720
+  },
+  "clips": [
+    {
+      "cell": {
+        "column": 0,
+        "row": 0
+      },
+      "model": "best_ema",
+      "horizon": 4,
+      "episode": 0,
+      "seed": 42,
+      "file": "hand_target_best_ema_h4_episode_000000_seed_42_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 0
+      },
+      "model": "best_ema",
+      "horizon": 4,
+      "episode": 4,
+      "seed": 46,
+      "file": "hand_target_best_ema_h4_episode_000004_seed_46_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 0
+      },
+      "model": "best_ema",
+      "horizon": 4,
+      "episode": 6,
+      "seed": 48,
+      "file": "hand_target_best_ema_h4_episode_000006_seed_48_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 0
+      },
+      "model": "best_ema",
+      "horizon": 4,
+      "episode": 9,
+      "seed": 51,
+      "file": "hand_target_best_ema_h4_episode_000009_seed_51_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 0
+      },
+      "model": "best_ema",
+      "horizon": 4,
+      "episode": 12,
+      "seed": 54,
+      "file": "hand_target_best_ema_h4_episode_000012_seed_54_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 0,
+        "row": 1
+      },
+      "model": "best_ema",
+      "horizon": 4,
+      "episode": 15,
+      "seed": 57,
+      "file": "hand_target_best_ema_h4_episode_000015_seed_57_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 1
+      },
+      "model": "best_ema",
+      "horizon": 4,
+      "episode": 17,
+      "seed": 59,
+      "file": "hand_target_best_ema_h4_episode_000017_seed_59_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 1
+      },
+      "model": "best_ema",
+      "horizon": 4,
+      "episode": 23,
+      "seed": 65,
+      "file": "hand_target_best_ema_h4_episode_000023_seed_65_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 1
+      },
+      "model": "best_ema",
+      "horizon": 8,
+      "episode": 0,
+      "seed": 42,
+      "file": "hand_target_best_ema_h8_episode_000000_seed_42_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 1
+      },
+      "model": "best_ema",
+      "horizon": 8,
+      "episode": 3,
+      "seed": 45,
+      "file": "hand_target_best_ema_h8_episode_000003_seed_45_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 0,
+        "row": 2
+      },
+      "model": "best_ema",
+      "horizon": 8,
+      "episode": 7,
+      "seed": 49,
+      "file": "hand_target_best_ema_h8_episode_000007_seed_49_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 2
+      },
+      "model": "best_ema",
+      "horizon": 8,
+      "episode": 10,
+      "seed": 52,
+      "file": "hand_target_best_ema_h8_episode_000010_seed_52_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 2
+      },
+      "model": "best_ema",
+      "horizon": 8,
+      "episode": 12,
+      "seed": 54,
+      "file": "hand_target_best_ema_h8_episode_000012_seed_54_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 2
+      },
+      "model": "best_ema",
+      "horizon": 8,
+      "episode": 15,
+      "seed": 57,
+      "file": "hand_target_best_ema_h8_episode_000015_seed_57_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 2
+      },
+      "model": "best_ema",
+      "horizon": 8,
+      "episode": 21,
+      "seed": 63,
+      "file": "hand_target_best_ema_h8_episode_000021_seed_63_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 0,
+        "row": 3
+      },
+      "model": "best_ema",
+      "horizon": 8,
+      "episode": 23,
+      "seed": 65,
+      "file": "hand_target_best_ema_h8_episode_000023_seed_65_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 3
+      },
+      "model": "best_ema",
+      "horizon": 16,
+      "episode": 1,
+      "seed": 43,
+      "file": "hand_target_best_ema_h16_episode_000001_seed_43_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 3
+      },
+      "model": "best_ema",
+      "horizon": 16,
+      "episode": 3,
+      "seed": 45,
+      "file": "hand_target_best_ema_h16_episode_000003_seed_45_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 3
+      },
+      "model": "best_ema",
+      "horizon": 16,
+      "episode": 5,
+      "seed": 47,
+      "file": "hand_target_best_ema_h16_episode_000005_seed_47_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 3
+      },
+      "model": "best_ema",
+      "horizon": 16,
+      "episode": 8,
+      "seed": 50,
+      "file": "hand_target_best_ema_h16_episode_000008_seed_50_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 0,
+        "row": 4
+      },
+      "model": "best_ema",
+      "horizon": 16,
+      "episode": 12,
+      "seed": 54,
+      "file": "hand_target_best_ema_h16_episode_000012_seed_54_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 4
+      },
+      "model": "best_ema",
+      "horizon": 16,
+      "episode": 15,
+      "seed": 57,
+      "file": "hand_target_best_ema_h16_episode_000015_seed_57_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 4
+      },
+      "model": "best_ema",
+      "horizon": 16,
+      "episode": 17,
+      "seed": 59,
+      "file": "hand_target_best_ema_h16_episode_000017_seed_59_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 4
+      },
+      "model": "best_ema",
+      "horizon": 16,
+      "episode": 20,
+      "seed": 62,
+      "file": "hand_target_best_ema_h16_episode_000020_seed_62_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 4
+      },
+      "model": "best_ema",
+      "horizon": 16,
+      "episode": 22,
+      "seed": 64,
+      "file": "hand_target_best_ema_h16_episode_000022_seed_64_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 0
+      },
+      "model": "epoch100_raw",
+      "horizon": 4,
+      "episode": 1,
+      "seed": 43,
+      "file": "hand_target_epoch100_raw_h4_episode_000001_seed_43_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 0
+      },
+      "model": "epoch100_raw",
+      "horizon": 4,
+      "episode": 3,
+      "seed": 45,
+      "file": "hand_target_epoch100_raw_h4_episode_000003_seed_45_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 0
+      },
+      "model": "epoch100_raw",
+      "horizon": 4,
+      "episode": 6,
+      "seed": 48,
+      "file": "hand_target_epoch100_raw_h4_episode_000006_seed_48_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 0
+      },
+      "model": "epoch100_raw",
+      "horizon": 4,
+      "episode": 10,
+      "seed": 52,
+      "file": "hand_target_epoch100_raw_h4_episode_000010_seed_52_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 0
+      },
+      "model": "epoch100_raw",
+      "horizon": 4,
+      "episode": 12,
+      "seed": 54,
+      "file": "hand_target_epoch100_raw_h4_episode_000012_seed_54_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 1
+      },
+      "model": "epoch100_raw",
+      "horizon": 4,
+      "episode": 15,
+      "seed": 57,
+      "file": "hand_target_epoch100_raw_h4_episode_000015_seed_57_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 1
+      },
+      "model": "epoch100_raw",
+      "horizon": 4,
+      "episode": 20,
+      "seed": 62,
+      "file": "hand_target_epoch100_raw_h4_episode_000020_seed_62_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 1
+      },
+      "model": "epoch100_raw",
+      "horizon": 4,
+      "episode": 24,
+      "seed": 66,
+      "file": "hand_target_epoch100_raw_h4_episode_000024_seed_66_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 1
+      },
+      "model": "epoch100_raw",
+      "horizon": 8,
+      "episode": 0,
+      "seed": 42,
+      "file": "hand_target_epoch100_raw_h8_episode_000000_seed_42_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 1
+      },
+      "model": "epoch100_raw",
+      "horizon": 8,
+      "episode": 4,
+      "seed": 46,
+      "file": "hand_target_epoch100_raw_h8_episode_000004_seed_46_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 2
+      },
+      "model": "epoch100_raw",
+      "horizon": 8,
+      "episode": 7,
+      "seed": 49,
+      "file": "hand_target_epoch100_raw_h8_episode_000007_seed_49_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 2
+      },
+      "model": "epoch100_raw",
+      "horizon": 8,
+      "episode": 10,
+      "seed": 52,
+      "file": "hand_target_epoch100_raw_h8_episode_000010_seed_52_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 2
+      },
+      "model": "epoch100_raw",
+      "horizon": 8,
+      "episode": 12,
+      "seed": 54,
+      "file": "hand_target_epoch100_raw_h8_episode_000012_seed_54_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 2
+      },
+      "model": "epoch100_raw",
+      "horizon": 8,
+      "episode": 14,
+      "seed": 56,
+      "file": "hand_target_epoch100_raw_h8_episode_000014_seed_56_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 2
+      },
+      "model": "epoch100_raw",
+      "horizon": 8,
+      "episode": 15,
+      "seed": 57,
+      "file": "hand_target_epoch100_raw_h8_episode_000015_seed_57_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 3
+      },
+      "model": "epoch100_raw",
+      "horizon": 8,
+      "episode": 22,
+      "seed": 64,
+      "file": "hand_target_epoch100_raw_h8_episode_000022_seed_64_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 3
+      },
+      "model": "epoch100_raw",
+      "horizon": 16,
+      "episode": 0,
+      "seed": 42,
+      "file": "hand_target_epoch100_raw_h16_episode_000000_seed_42_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 3
+      },
+      "model": "epoch100_raw",
+      "horizon": 16,
+      "episode": 6,
+      "seed": 48,
+      "file": "hand_target_epoch100_raw_h16_episode_000006_seed_48_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 3
+      },
+      "model": "epoch100_raw",
+      "horizon": 16,
+      "episode": 9,
+      "seed": 51,
+      "file": "hand_target_epoch100_raw_h16_episode_000009_seed_51_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 3
+      },
+      "model": "epoch100_raw",
+      "horizon": 16,
+      "episode": 11,
+      "seed": 53,
+      "file": "hand_target_epoch100_raw_h16_episode_000011_seed_53_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 4
+      },
+      "model": "epoch100_raw",
+      "horizon": 16,
+      "episode": 13,
+      "seed": 55,
+      "file": "hand_target_epoch100_raw_h16_episode_000013_seed_55_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 4
+      },
+      "model": "epoch100_raw",
+      "horizon": 16,
+      "episode": 15,
+      "seed": 57,
+      "file": "hand_target_epoch100_raw_h16_episode_000015_seed_57_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 4
+      },
+      "model": "epoch100_raw",
+      "horizon": 16,
+      "episode": 17,
+      "seed": 59,
+      "file": "hand_target_epoch100_raw_h16_episode_000017_seed_59_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 4
+      },
+      "model": "epoch100_raw",
+      "horizon": 16,
+      "episode": 19,
+      "seed": 61,
+      "file": "hand_target_epoch100_raw_h16_episode_000019_seed_61_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 4
+      },
+      "model": "epoch100_raw",
+      "horizon": 16,
+      "episode": 22,
+      "seed": 64,
+      "file": "hand_target_epoch100_raw_h16_episode_000022_seed_64_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 0,
+        "row": 5
+      },
+      "model": "latest_raw",
+      "horizon": 4,
+      "episode": 1,
+      "seed": 43,
+      "file": "hand_target_latest_raw_h4_episode_000001_seed_43_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 5
+      },
+      "model": "latest_raw",
+      "horizon": 4,
+      "episode": 3,
+      "seed": 45,
+      "file": "hand_target_latest_raw_h4_episode_000003_seed_45_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 5
+      },
+      "model": "latest_raw",
+      "horizon": 4,
+      "episode": 6,
+      "seed": 48,
+      "file": "hand_target_latest_raw_h4_episode_000006_seed_48_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 5
+      },
+      "model": "latest_raw",
+      "horizon": 4,
+      "episode": 8,
+      "seed": 50,
+      "file": "hand_target_latest_raw_h4_episode_000008_seed_50_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 5
+      },
+      "model": "latest_raw",
+      "horizon": 4,
+      "episode": 10,
+      "seed": 52,
+      "file": "hand_target_latest_raw_h4_episode_000010_seed_52_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 0,
+        "row": 6
+      },
+      "model": "latest_raw",
+      "horizon": 4,
+      "episode": 13,
+      "seed": 55,
+      "file": "hand_target_latest_raw_h4_episode_000013_seed_55_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 6
+      },
+      "model": "latest_raw",
+      "horizon": 4,
+      "episode": 18,
+      "seed": 60,
+      "file": "hand_target_latest_raw_h4_episode_000018_seed_60_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 6
+      },
+      "model": "latest_raw",
+      "horizon": 4,
+      "episode": 22,
+      "seed": 64,
+      "file": "hand_target_latest_raw_h4_episode_000022_seed_64_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 6
+      },
+      "model": "latest_raw",
+      "horizon": 8,
+      "episode": 2,
+      "seed": 44,
+      "file": "hand_target_latest_raw_h8_episode_000002_seed_44_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 6
+      },
+      "model": "latest_raw",
+      "horizon": 8,
+      "episode": 5,
+      "seed": 47,
+      "file": "hand_target_latest_raw_h8_episode_000005_seed_47_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 0,
+        "row": 7
+      },
+      "model": "latest_raw",
+      "horizon": 8,
+      "episode": 10,
+      "seed": 52,
+      "file": "hand_target_latest_raw_h8_episode_000010_seed_52_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 7
+      },
+      "model": "latest_raw",
+      "horizon": 8,
+      "episode": 12,
+      "seed": 54,
+      "file": "hand_target_latest_raw_h8_episode_000012_seed_54_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 7
+      },
+      "model": "latest_raw",
+      "horizon": 8,
+      "episode": 13,
+      "seed": 55,
+      "file": "hand_target_latest_raw_h8_episode_000013_seed_55_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 7
+      },
+      "model": "latest_raw",
+      "horizon": 8,
+      "episode": 17,
+      "seed": 59,
+      "file": "hand_target_latest_raw_h8_episode_000017_seed_59_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 7
+      },
+      "model": "latest_raw",
+      "horizon": 8,
+      "episode": 18,
+      "seed": 60,
+      "file": "hand_target_latest_raw_h8_episode_000018_seed_60_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 0,
+        "row": 8
+      },
+      "model": "latest_raw",
+      "horizon": 8,
+      "episode": 22,
+      "seed": 64,
+      "file": "hand_target_latest_raw_h8_episode_000022_seed_64_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 8
+      },
+      "model": "latest_raw",
+      "horizon": 16,
+      "episode": 0,
+      "seed": 42,
+      "file": "hand_target_latest_raw_h16_episode_000000_seed_42_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 8
+      },
+      "model": "latest_raw",
+      "horizon": 16,
+      "episode": 4,
+      "seed": 46,
+      "file": "hand_target_latest_raw_h16_episode_000004_seed_46_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 8
+      },
+      "model": "latest_raw",
+      "horizon": 16,
+      "episode": 6,
+      "seed": 48,
+      "file": "hand_target_latest_raw_h16_episode_000006_seed_48_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 8
+      },
+      "model": "latest_raw",
+      "horizon": 16,
+      "episode": 10,
+      "seed": 52,
+      "file": "hand_target_latest_raw_h16_episode_000010_seed_52_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 0,
+        "row": 9
+      },
+      "model": "latest_raw",
+      "horizon": 16,
+      "episode": 12,
+      "seed": 54,
+      "file": "hand_target_latest_raw_h16_episode_000012_seed_54_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 1,
+        "row": 9
+      },
+      "model": "latest_raw",
+      "horizon": 16,
+      "episode": 14,
+      "seed": 56,
+      "file": "hand_target_latest_raw_h16_episode_000014_seed_56_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 2,
+        "row": 9
+      },
+      "model": "latest_raw",
+      "horizon": 16,
+      "episode": 17,
+      "seed": 59,
+      "file": "hand_target_latest_raw_h16_episode_000017_seed_59_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 3,
+        "row": 9
+      },
+      "model": "latest_raw",
+      "horizon": 16,
+      "episode": 20,
+      "seed": 62,
+      "file": "hand_target_latest_raw_h16_episode_000020_seed_62_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 4,
+        "row": 9
+      },
+      "model": "latest_raw",
+      "horizon": 16,
+      "episode": 23,
+      "seed": 65,
+      "file": "hand_target_latest_raw_h16_episode_000023_seed_65_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 5
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 4,
+      "episode": 0,
+      "seed": 42,
+      "file": "rgb_only_final_raw_h4_episode_000000_seed_42_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 5
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 4,
+      "episode": 1,
+      "seed": 43,
+      "file": "rgb_only_final_raw_h4_episode_000001_seed_43_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 5
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 4,
+      "episode": 10,
+      "seed": 52,
+      "file": "rgb_only_final_raw_h4_episode_000010_seed_52_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 5
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 4,
+      "episode": 11,
+      "seed": 53,
+      "file": "rgb_only_final_raw_h4_episode_000011_seed_53_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 5
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 4,
+      "episode": 13,
+      "seed": 55,
+      "file": "rgb_only_final_raw_h4_episode_000013_seed_55_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 6
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 4,
+      "episode": 14,
+      "seed": 56,
+      "file": "rgb_only_final_raw_h4_episode_000014_seed_56_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 6
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 4,
+      "episode": 19,
+      "seed": 61,
+      "file": "rgb_only_final_raw_h4_episode_000019_seed_61_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 6
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 4,
+      "episode": 23,
+      "seed": 65,
+      "file": "rgb_only_final_raw_h4_episode_000023_seed_65_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 6
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 8,
+      "episode": 1,
+      "seed": 43,
+      "file": "rgb_only_final_raw_h8_episode_000001_seed_43_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 6
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 8,
+      "episode": 3,
+      "seed": 45,
+      "file": "rgb_only_final_raw_h8_episode_000003_seed_45_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 7
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 8,
+      "episode": 5,
+      "seed": 47,
+      "file": "rgb_only_final_raw_h8_episode_000005_seed_47_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 7
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 8,
+      "episode": 6,
+      "seed": 48,
+      "file": "rgb_only_final_raw_h8_episode_000006_seed_48_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 7
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 8,
+      "episode": 9,
+      "seed": 51,
+      "file": "rgb_only_final_raw_h8_episode_000009_seed_51_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 7
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 8,
+      "episode": 13,
+      "seed": 55,
+      "file": "rgb_only_final_raw_h8_episode_000013_seed_55_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 7
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 8,
+      "episode": 14,
+      "seed": 56,
+      "file": "rgb_only_final_raw_h8_episode_000014_seed_56_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 8
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 8,
+      "episode": 19,
+      "seed": 61,
+      "file": "rgb_only_final_raw_h8_episode_000019_seed_61_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 8
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 16,
+      "episode": 1,
+      "seed": 43,
+      "file": "rgb_only_final_raw_h16_episode_000001_seed_43_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 8
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 16,
+      "episode": 3,
+      "seed": 45,
+      "file": "rgb_only_final_raw_h16_episode_000003_seed_45_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 8
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 16,
+      "episode": 5,
+      "seed": 47,
+      "file": "rgb_only_final_raw_h16_episode_000005_seed_47_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 8
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 16,
+      "episode": 7,
+      "seed": 49,
+      "file": "rgb_only_final_raw_h16_episode_000007_seed_49_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 5,
+        "row": 9
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 16,
+      "episode": 13,
+      "seed": 55,
+      "file": "rgb_only_final_raw_h16_episode_000013_seed_55_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 6,
+        "row": 9
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 16,
+      "episode": 15,
+      "seed": 57,
+      "file": "rgb_only_final_raw_h16_episode_000015_seed_57_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 7,
+        "row": 9
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 16,
+      "episode": 16,
+      "seed": 58,
+      "file": "rgb_only_final_raw_h16_episode_000016_seed_58_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 8,
+        "row": 9
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 16,
+      "episode": 19,
+      "seed": 61,
+      "file": "rgb_only_final_raw_h16_episode_000019_seed_61_10cm.mp4"
+    },
+    {
+      "cell": {
+        "column": 9,
+        "row": 9
+      },
+      "model": "rgb_only_final_raw",
+      "horizon": 16,
+      "episode": 22,
+      "seed": 64,
+      "file": "rgb_only_final_raw_h16_episode_000022_seed_64_10cm.mp4"
+    }
+  ]
+}

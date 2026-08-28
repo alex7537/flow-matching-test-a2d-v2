@@ -2,11 +2,13 @@
 
 基于 A2D 机器人抓取数据训练连续关节动作策略。当前主线是双 RGB、可选 proprio 条件的 Flow Matching，输出未来 16 步绝对 joint action。
 
-## 成功抓取展示（自动循环）
+## 100 次成功抓取展示（自动循环）
 
-![成功抓取拼接视频](docs/assets/grasp_success_montage.gif)
+![100 次成功抓取 10×10 拼接](docs/assets/grasp_success_grid_10x10.gif)
 
-2×2 拼接使用同一测试条件：episode `000002`、seed `44`、10cm；左上 H4 best EMA、右上 H8 latest raw、左下 H12 best EMA、右下 H16 best EMA。[查看高清 MP4](docs/assets/grasp_success_montage.mp4)。
+10×10 展示从 v17 评测中均衡选取 100 段严格 10cm 成功视频，每个模型 25 段。四个 5×5 象限依次为：左上 best EMA、右上 epoch-100 raw、左下 latest raw、右下 RGB-only final raw。边框颜色表示 execute horizon：蓝色 H4、绿色 H8、橙色 H16。
+
+[查看高清 MP4](docs/assets/grasp_success_grid_10x10.mp4) · [查看完整选片清单](docs/assets/grasp_success_grid_10x10_sources.json) · [查看旧版 2×2 GIF](docs/assets/grasp_success_montage.gif)
 
 ## 数据
 
