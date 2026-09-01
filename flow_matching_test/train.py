@@ -189,6 +189,11 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
         enhanced_proprio=bool(data_cfg.get("enhanced_proprio", False)),
         action_horizon=int(data_cfg.get("action_horizon", 16)),
         action_offset_steps=int(data_cfg.get("action_offset_steps", 1)),
+        video_aux_enabled=bool(data_cfg.get("video_aux_enabled", False)),
+        video_key=str(data_cfg.get("video_key", "rgb_head")),
+        video_condition_steps=int(data_cfg.get("video_condition_steps", 9)),
+        video_future_steps=int(data_cfg.get("video_future_steps", 16)),
+        video_future_offset_steps=int(data_cfg.get("video_future_offset_steps", 1)),
         include_tail_padded_windows=bool(
             data_cfg.get("include_tail_padded_windows", False)
         ),
@@ -653,6 +658,11 @@ def main() -> None:
         "include_tail_padded_windows": train_dataset.cfg.include_tail_padded_windows,
         "lift_oversample_factor": train_dataset.cfg.lift_oversample_factor,
         "enhanced_proprio": train_dataset.cfg.enhanced_proprio,
+        "video_aux_enabled": train_dataset.cfg.video_aux_enabled,
+        "video_key": train_dataset.cfg.video_key,
+        "video_condition_steps": train_dataset.cfg.video_condition_steps,
+        "video_future_steps": train_dataset.cfg.video_future_steps,
+        "video_future_offset_steps": train_dataset.cfg.video_future_offset_steps,
         "dataset_manifest_sha256": split_manifest.get("dataset_manifest_sha256"),
         "split_manifest_sha256": split_manifest.get("split_manifest_sha256"),
     }
@@ -813,7 +823,11 @@ def main() -> None:
         checkpoint_policy_type = resolve_policy_type(
             checkpoint.get("policy_spec", {"type": checkpoint.get("policy_type", "flow_matching")})
         )
-        if checkpoint_policy_type != policy_type:
+        video_aux_upgrade = (
+            policy_type == "flow_matching_video_aux"
+            and checkpoint_policy_type == "flow_matching"
+        )
+        if checkpoint_policy_type != policy_type and not video_aux_upgrade:
             raise ValueError(
                 f"init checkpoint policy_type={checkpoint_policy_type!r} does not match "
                 f"current policy_type={policy_type!r}"
@@ -849,21 +863,29 @@ def main() -> None:
         )
         if source_enhanced_proprio and not model_cfg["enhanced_proprio"]:
             raise ValueError("cannot initialize a base model from an enhanced-proprio checkpoint")
-        missing_init_keys: list[str] = []
+        allowed_missing: set[str] = set()
         if model_cfg["enhanced_proprio"] and not source_enhanced_proprio:
+            allowed_missing.update(
+                {
+                    f"{name}.{field}"
+                    for name in (
+                        "joint_delta_proj",
+                        "previous_action_proj",
+                        "hand_tracking_error_proj",
+                    )
+                    for field in ("weight", "bias")
+                }
+            )
+        if video_aux_upgrade:
+            allowed_missing.update(
+                key for key in model.state_dict() if key.startswith("video_aux_head.")
+            )
+        missing_init_keys: list[str] = []
+        if allowed_missing:
             load_result = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
-            allowed_missing = {
-                f"{name}.{field}"
-                for name in (
-                    "joint_delta_proj",
-                    "previous_action_proj",
-                    "hand_tracking_error_proj",
-                )
-                for field in ("weight", "bias")
-            }
             if set(load_result.missing_keys) != allowed_missing or load_result.unexpected_keys:
                 raise ValueError(
-                    "enhanced-proprio init state mismatch: "
+                    "model-only init state mismatch: "
                     f"missing={load_result.missing_keys}, "
                     f"unexpected={load_result.unexpected_keys}"
                 )
@@ -879,6 +901,7 @@ def main() -> None:
             "optimizer_scheduler_reset": True,
             "source_enhanced_proprio": source_enhanced_proprio,
             "initialized_enhanced_modules": missing_init_keys,
+            "initialized_model_modules": missing_init_keys,
         }
         _append_jsonl(output_dir / "init_events.jsonl", init_event)
         print("INIT_MODEL_ONLY_OK " + json.dumps(init_event, ensure_ascii=False))

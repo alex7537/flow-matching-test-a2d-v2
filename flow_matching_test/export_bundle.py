@@ -91,7 +91,12 @@ def _inference_config(
         policy_type = "imle"
     if policy_type in {"dp", "diffusion_policy"}:
         policy_type = "diffusion"
-    if policy_type not in {"flow_matching", "imle", "diffusion"}:
+    if policy_type not in {
+        "flow_matching",
+        "flow_matching_video_aux",
+        "imle",
+        "diffusion",
+    }:
         raise ValueError(f"unsupported rollout policy_type={policy_type!r}")
     policy_cfg["type"] = policy_type
     policy_cfg = materialize_policy_config(policy_cfg)

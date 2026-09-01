@@ -78,6 +78,11 @@ class A2DConfig:
     enhanced_proprio: bool = False
     action_horizon: int = 16
     action_offset_steps: int = 1
+    video_aux_enabled: bool = False
+    video_key: str = "rgb_head"
+    video_condition_steps: int = 9
+    video_future_steps: int = 16
+    video_future_offset_steps: int = 1
     include_tail_padded_windows: bool = False
     transition_oversample_factor: int = 1
     lift_oversample_factor: int = 1
@@ -446,6 +451,15 @@ class A2DFlowDataset(Dataset):
                  norm_stats: dict, train: bool):
         if cfg.action_offset_steps < 0:
             raise ValueError("action_offset_steps must be >= 0")
+        if cfg.video_aux_enabled:
+            if cfg.video_condition_steps <= 0 or cfg.video_future_steps <= 0:
+                raise ValueError("video condition/future steps must be positive")
+            if cfg.video_future_offset_steps < 0:
+                raise ValueError("video_future_offset_steps must be >= 0")
+            if (cfg.video_condition_steps - 1) % 4 != 0:
+                raise ValueError("video_condition_steps must satisfy 4n+1")
+            if cfg.video_future_steps % 4 != 0:
+                raise ValueError("video_future_steps must be divisible by 4")
         self.cfg = cfg
         self.episodes = episodes
         self.stats = norm_stats
@@ -453,9 +467,17 @@ class A2DFlowDataset(Dataset):
         self.epoch = 0
         # flat sample index: (ep_idx, t); every t with a full history is valid
         self.samples: list[tuple[int, int]] = []
-        h = max(cfg.history_steps - 1, int(cfg.enhanced_proprio))
+        h = max(
+            cfg.history_steps - 1,
+            int(cfg.enhanced_proprio),
+            cfg.video_condition_steps - 1 if cfg.video_aux_enabled else 0,
+        )
+        max_offset = max(
+            cfg.action_offset_steps,
+            cfg.video_future_offset_steps if cfg.video_aux_enabled else 0,
+        )
         for i, e in enumerate(episodes):
-            for t in range(h, e["length"] - cfg.action_offset_steps):
+            for t in range(h, e["length"] - max_offset):
                 self.samples.append((i, t))
         if cfg.max_open_hdf5_files < 1:
             raise ValueError("max_open_hdf5_files must be >= 1")
@@ -550,7 +572,12 @@ class A2DFlowDataset(Dataset):
             int(cfg.seed) * 1_000_003 + self.epoch * 100_003 + int(idx)
         ) % (2**63 - 1)
         rng = np.random.default_rng(augmentation_seed)
-        aug_params = {cam: self._sample_aug_params(rng) for cam in cfg.image_keys}
+        augmented_cameras = tuple(
+            dict.fromkeys(
+                (*cfg.image_keys, cfg.video_key) if cfg.video_aux_enabled else cfg.image_keys
+            )
+        )
+        aug_params = {cam: self._sample_aug_params(rng) for cam in augmented_cameras}
 
         # images: history frames per camera, shared aug params per sample is
         # optional; here each frame is augmented consistently enough for IL
@@ -586,6 +613,36 @@ class A2DFlowDataset(Dataset):
             "action": torch.from_numpy(action),
             "action_mask": torch.from_numpy(mask),
         }
+        if cfg.video_aux_enabled:
+            condition_start = t - cfg.video_condition_steps + 1
+            condition_frames = []
+            for frame_idx in range(condition_start, t + 1):
+                image = self._load_frame(ep_idx, cfg.video_key, frame_idx)
+                image = self._resize_aug(image, aug_params[cfg.video_key])
+                condition_frames.append(torch.from_numpy(image).permute(2, 0, 1))
+
+            video_start = t + cfg.video_future_offset_steps
+            video_end = min(video_start + cfg.video_future_steps, T)
+            future_frames = []
+            for frame_idx in range(video_start, video_end):
+                image = self._load_frame(ep_idx, cfg.video_key, frame_idx)
+                image = self._resize_aug(image, aug_params[cfg.video_key])
+                future_frames.append(torch.from_numpy(image).permute(2, 0, 1))
+            valid_future_steps = len(future_frames)
+            if valid_future_steps <= 0:
+                raise RuntimeError("video auxiliary sample has no real future frame")
+            while len(future_frames) < cfg.video_future_steps:
+                future_frames.append(future_frames[-1].clone())
+            result.update(
+                {
+                    "video_condition": torch.stack(condition_frames),
+                    "video_future": torch.stack(future_frames),
+                    "video_valid_mask": torch.tensor(
+                        valid_future_steps == cfg.video_future_steps,
+                        dtype=torch.bool,
+                    ),
+                }
+            )
         if cfg.enhanced_proprio:
             current_state = f[cfg.obs_group][cfg.state_key][t].astype(np.float32)
             previous_state = f[cfg.obs_group][cfg.state_key][t - 1].astype(np.float32)
@@ -732,7 +789,7 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
             obs["joint_delta"] = sample["joint_delta"]
             obs["previous_action"] = sample["previous_action"]
             obs["hand_tracking_error"] = sample["hand_tracking_error"]
-        return {
+        result: dict[str, torch.Tensor | dict[str, torch.Tensor]] = {
             "obs": obs,
             "action": sample["action"],
             "action_mask": sample["action_mask"],
@@ -740,6 +797,15 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
             "is_lift": torch.tensor(self.lift_by_sample[sample_key], dtype=torch.bool),
             "sample_index": torch.tensor(idx, dtype=torch.long),
         }
+        if self.cfg.video_aux_enabled:
+            result.update(
+                {
+                    "video_condition": sample["video_condition"] * 2.0 - 1.0,
+                    "video_future": sample["video_future"] * 2.0 - 1.0,
+                    "video_valid_mask": sample["video_valid_mask"],
+                }
+            )
+        return result
 
     def export_stats(self) -> dict[str, torch.Tensor]:
         return {

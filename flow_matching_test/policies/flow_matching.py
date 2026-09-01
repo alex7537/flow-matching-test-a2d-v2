@@ -234,13 +234,38 @@ class FlowMatchingPolicy(ActionPolicy):
         cond_tokens: torch.Tensor,
         timesteps: torch.Tensor,
     ) -> torch.Tensor:
+        return self.head(
+            self._features_from_cond_tokens(
+                noisy_action=noisy_action,
+                cond_tokens=cond_tokens,
+                timesteps=timesteps,
+            )
+        )
+
+    def _features_from_cond_tokens(
+        self,
+        *,
+        noisy_action: torch.Tensor,
+        cond_tokens: torch.Tensor,
+        timesteps: torch.Tensor,
+    ) -> torch.Tensor:
         action_tokens = self.action_proj(noisy_action) + self.action_pos[:, : noisy_action.shape[1]]
         time_tokens = self.time_embed(timesteps.float()).unsqueeze(1)
         x = action_tokens + time_tokens
         for block in self.blocks:
             x = block(x, cond_tokens)
-        x = self.final_norm(x)
-        return self.head(x)
+        return self.final_norm(x)
+
+    def _augment_training_loss(
+        self,
+        *,
+        action_loss: torch.Tensor,
+        metrics: dict[str, float | None],
+        batch: dict[str, torch.Tensor | dict[str, torch.Tensor]],
+        cond_tokens: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict[str, float | None]]:
+        del batch, cond_tokens
+        return action_loss, metrics
 
     def _compute_loss_with_randomness(
         self,
@@ -258,7 +283,12 @@ class FlowMatchingPolicy(ActionPolicy):
         t_expand = timesteps[:, None, None].to(clean_action.dtype)
         noisy_action = (1.0 - t_expand) * noise + t_expand * clean_action
         target_velocity = clean_action - noise
-        pred_velocity = self(noisy_action=noisy_action, obs=obs, timesteps=timesteps)
+        cond_tokens = self._encode_obs(obs)
+        pred_velocity = self._predict_from_cond_tokens(
+            noisy_action=noisy_action,
+            cond_tokens=cond_tokens,
+            timesteps=timesteps,
+        )
         action_mask = batch.get("action_mask")
         if action_mask is not None and not isinstance(action_mask, torch.Tensor):
             raise TypeError("batch['action_mask'] must be a tensor")
@@ -287,11 +317,17 @@ class FlowMatchingPolicy(ActionPolicy):
                 segment_losses["lift_loss"] = float(
                     per_sample_loss[lift_mask].mean().detach().item()
                 )
-        return loss, {
+        metrics = {
             "flow_loss": float(loss.detach().item()),
             "t_mean": float(timesteps.mean().detach().item()),
             **segment_losses,
         }
+        return self._augment_training_loss(
+            action_loss=loss,
+            metrics=metrics,
+            batch=batch,
+            cond_tokens=cond_tokens,
+        )
 
     def compute_loss(self, batch: dict[str, torch.Tensor | dict[str, torch.Tensor]]) -> tuple[torch.Tensor, dict[str, float | None]]:
         clean_action = batch["action"]

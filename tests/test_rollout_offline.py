@@ -273,6 +273,7 @@ def test_bundle_can_override_legacy_checkpoint_selection(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     "policy_cfg",
     [
+        {"type": "flow_matching_video_aux", "video_aux_hidden_dim": 8},
         {"type": "imle", "n_samples_per_condition": 2, "rs_imle_epsilon": 0.0},
         {"type": "diffusion", "diffusion_train_steps": 10, "diffusion_inference_steps": 3},
     ],
@@ -283,6 +284,7 @@ def test_alternate_policy_bundle_round_trip(tmp_path: Path, policy_cfg: dict) ->
     _checkpoint(ckpt, policy_cfg=policy_cfg)
     export_eval_bundle(ckpt, bundle, execute_horizon=2)
     exported_config = yaml.safe_load((bundle / "config.yaml").read_text())
+    assert exported_config["policy"]["type"] == resolve_policy_type(policy_cfg)
     if policy_cfg["type"] == "imle":
         assert exported_config["policy"]["bidirection_enabled"] is True
         assert exported_config["policy"]["bidirection_num_candidates"] == 32

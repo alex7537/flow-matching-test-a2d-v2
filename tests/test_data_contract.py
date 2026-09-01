@@ -27,6 +27,68 @@ from scripts.ingest_a2d import admission_reason
 
 
 class DataContractTest(unittest.TestCase):
+    def test_video_aux_uses_nine_history_frames_and_masks_incomplete_future(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "episode.hdf5"
+            length = 30
+            values = np.repeat(np.arange(length, dtype=np.float32)[:, None], 13, axis=1)
+            images = np.stack(
+                [np.full((4, 4, 3), index, dtype=np.uint8) for index in range(length)]
+            )
+            with h5py.File(path, "w") as file:
+                observations = file.create_group("observations")
+                observations.create_dataset("qpos", data=values)
+                observations.create_dataset("rgb_head", data=images)
+                file.create_dataset("action", data=values)
+
+            dataset = A2DFlowDataset(
+                cfg=A2DConfig(
+                    image_keys=("rgb_head",),
+                    image_size=4,
+                    history_steps=1,
+                    action_horizon=16,
+                    action_offset_steps=1,
+                    video_aux_enabled=True,
+                    video_key="rgb_head",
+                    video_condition_steps=9,
+                    video_future_steps=16,
+                    video_future_offset_steps=1,
+                    aug_random_crop_pad=0,
+                ),
+                episodes=[{"path": str(path), "length": length}],
+                norm_stats={
+                    "state": {"min": [0.0] * 13, "span": [29.0] * 13},
+                    "action": {"min": [0.0] * 13, "span": [29.0] * 13},
+                },
+                train=False,
+            )
+
+            self.assertEqual(dataset.samples[0], (0, 8))
+            complete = dataset[0]
+            self.assertEqual(tuple(complete["video_condition"].shape), (9, 3, 4, 4))
+            self.assertEqual(tuple(complete["video_future"].shape), (16, 3, 4, 4))
+            np.testing.assert_allclose(
+                complete["video_condition"][:, 0, 0, 0].numpy(),
+                np.arange(9, dtype=np.float32) / 255.0,
+            )
+            np.testing.assert_allclose(
+                complete["video_future"][:, 0, 0, 0].numpy(),
+                np.arange(9, 25, dtype=np.float32) / 255.0,
+            )
+            self.assertTrue(bool(complete["video_valid_mask"].item()))
+
+            tail = dataset[len(dataset) - 1]
+            self.assertFalse(bool(tail["video_valid_mask"].item()))
+            np.testing.assert_allclose(
+                tail["video_future"][:, 0, 0, 0].numpy(),
+                np.full(16, 29.0 / 255.0, dtype=np.float32),
+            )
+            np.testing.assert_array_equal(
+                tail["action_mask"].numpy(),
+                np.array([1] + [0] * 15, dtype=np.float32),
+            )
+            dataset.close()
+
     def test_default_action_chunk_starts_at_the_next_frame(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "episode.hdf5"

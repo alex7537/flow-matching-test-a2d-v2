@@ -7,12 +7,15 @@ from flow_matching_test.policies.base import ActionPolicy
 from flow_matching_test.policies.diffusion import DiffusionPolicy
 from flow_matching_test.policies.flow_matching import FlowMatchingPolicy
 from flow_matching_test.policies.imle import ImlePolicy
+from flow_matching_test.policies.video_aux import VideoAuxFlowMatchingPolicy
 
 
 _ALIASES = {
     "cfm": "flow_matching",
     "flow": "flow_matching",
     "flow_matching": "flow_matching",
+    "cfm_video_aux": "flow_matching_video_aux",
+    "flow_matching_video_aux": "flow_matching_video_aux",
     "diffusion": "diffusion",
     "diffusion_policy": "diffusion",
     "dp": "diffusion",
@@ -26,7 +29,14 @@ def materialize_policy_config(policy_cfg: Mapping[str, Any] | None) -> dict[str,
     config = dict(policy_cfg or {})
     policy_type = resolve_policy_type(config)
     config["type"] = policy_type
-    if policy_type == "imle":
+    if policy_type == "flow_matching_video_aux":
+        config.setdefault("video_loss_weight", 0.01)
+        config.setdefault("video_aux_hidden_dim", 128)
+        config.setdefault("video_condition_steps", 9)
+        config.setdefault("video_future_steps", 16)
+        config.setdefault("wan_vae_dtype", "bfloat16")
+        config.setdefault("video_codec_batch_size", 1)
+    elif policy_type == "imle":
         config.setdefault("n_samples_per_condition", 20)
         config.setdefault("rs_imle_epsilon", 0.03)
         config.setdefault("bidirection_enabled", True)
@@ -63,8 +73,10 @@ def build_policy(
     policy_cfg = materialize_policy_config(policy_cfg)
     policy_type = str(policy_cfg["type"])
     enhanced_proprio = bool(model_cfg.get("enhanced_proprio", False))
-    if enhanced_proprio and policy_type != "flow_matching":
-        raise ValueError("enhanced_proprio is currently supported only for flow_matching")
+    if enhanced_proprio and policy_type not in {"flow_matching", "flow_matching_video_aux"}:
+        raise ValueError(
+            "enhanced_proprio is currently supported only for flow_matching policies"
+        )
     if policy_type == "flow_matching":
         return FlowMatchingPolicy(
             image_keys=image_keys,
@@ -84,6 +96,37 @@ def build_policy(
             dropout=float(model_cfg.get("dropout", 0.0)),
             time_eps=float(model_cfg.get("time_eps", 1.0e-3)),
             num_inference_steps=int(model_cfg.get("num_inference_steps", 40)),
+        )
+    if policy_type == "flow_matching_video_aux":
+        return VideoAuxFlowMatchingPolicy(
+            image_keys=image_keys,
+            encoder_type=str(model_cfg.get("encoder_type", "cnn")),
+            timm_model_name=str(model_cfg.get("timm_model_name", "vit_small_r26_s32_224")),
+            timm_pretrained=bool(model_cfg.get("timm_pretrained", True)),
+            timm_tokens_per_frame=int(model_cfg.get("timm_tokens_per_frame", 1)),
+            timm_token_mode=str(model_cfg.get("timm_token_mode", "spatial")),
+            use_proprio=bool(model_cfg.get("use_proprio", True)),
+            enhanced_proprio=enhanced_proprio,
+            action_dim=int(action_dim),
+            history_steps=int(history_steps),
+            action_horizon=int(action_horizon),
+            d_model=int(model_cfg.get("d_model", 128)),
+            n_head=int(model_cfg.get("n_head", 4)),
+            n_layer=int(model_cfg.get("n_layer", 4)),
+            dropout=float(model_cfg.get("dropout", 0.0)),
+            time_eps=float(model_cfg.get("time_eps", 1.0e-3)),
+            num_inference_steps=int(model_cfg.get("num_inference_steps", 40)),
+            video_loss_weight=float(policy_cfg.get("video_loss_weight", 0.01)),
+            video_aux_hidden_dim=int(policy_cfg.get("video_aux_hidden_dim", 128)),
+            video_condition_steps=int(policy_cfg.get("video_condition_steps", 9)),
+            video_future_steps=int(policy_cfg.get("video_future_steps", 16)),
+            wan_vae_checkpoint_path=str(policy_cfg.get("wan_vae_checkpoint_path", "")),
+            wan_runtime_repo=str(policy_cfg.get("wan_runtime_repo", "")),
+            wan_runtime_site_packages=str(
+                policy_cfg.get("wan_runtime_site_packages", "")
+            ),
+            wan_vae_dtype=str(policy_cfg.get("wan_vae_dtype", "bfloat16")),
+            video_codec_batch_size=int(policy_cfg.get("video_codec_batch_size", 1)),
         )
     if policy_type == "imle":
         return ImlePolicy(
