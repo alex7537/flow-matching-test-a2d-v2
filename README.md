@@ -1,217 +1,243 @@
-# Flow Matching Test
+# A2D CFM + Wan Future-Video Auxiliary V1
 
-基于 A2D 机器人抓取数据训练连续关节动作策略。当前主线是双 RGB、可选 proprio 条件的 Flow Matching，输出未来 16 步绝对 joint action。
+本分支 `feat/v3-wan-video-aux-v1` 专门验证一件事：在已经可用的 A2D Conditional Flow Matching 动作策略上，加入冻结 Wan2.2 VAE 的未来视频 latent 辅助监督，是否能让策略形成更强的动作后果表征，并最终提高抓取 rollout 成功率。
 
-## 数据
+它是一个 **action policy + future-video auxiliary loss**，不是完整的联合视频—动作 WAM。训练时使用视频监督；部署时仍然只输入双相机 RGB 与 proprio，只输出 16 步关节动作，不生成视频、不加载 Wan VAE。
 
-当前使用 `a2d-450GB` 的 1,090 个成功 episodes：
+## 1. 数据契约
 
-```text
-原始帧数             180,087
-V3 exact-dedup 后    179,160
-train / val          981 / 109 episodes
-基础训练窗口          160,206
-有效训练样本          220,026
-验证样本              17,864
-```
+以当前时间点 `t` 为锚点：
 
-V3 数据语义：
+| 数据 | 时间范围 | 形状 | 用途 |
+|---|---|---:|---|
+| `rgb_head[t]` | 当前帧 | `[B,1,3,224,224]` | 动作 observation |
+| `rgb_right_hand[t]` | 当前帧 | `[B,1,3,224,224]` | 动作 observation |
+| proprio | 当前实际 joint 与增强状态 | token dim `384` | 动作 observation |
+| action GT | `action[t+1:t+17]` | `[B,16,13]` | CFM velocity 监督 |
+| video condition | `rgb_head[t-8:t+1]` | `[B,9,3,224,224]` | Wan 过去视频条件 |
+| video future GT | `rgb_head[t+1:t+17]` | `[B,16,3,224,224]` | 未来视频 latent 监督 |
 
-```text
-observation/qpos = arm2_pos(7) + hand2_pos(6)
-                  实际手臂 joint + 实际手部 joint
+上述区间采用 Python 半开区间，因此 `t+1:t+17` 正好包含 16 帧。
 
-action label     = arm2_pos(7) + hand2_pos_target(6)
-                  实际手臂轨迹 + 手部 commanded target
-```
-
-V2 的手部标签使用实际 `hand2_pos`，包含接触、回弹和跟踪误差。V3 改为学习 `hand2_pos_target`，让模型学习稳定的手部控制意图；observation 仍使用机器人当前的实际 joint state。
-
-## 输入与输出
-
-当前有两组受控实验：
-
-| 实验 | 输入 | 输出 |
-|---|---|---|
-| RGB+proprio | `rgb_head`、`rgb_right_hand`、当前 13 维实际 qpos | `[16,13]` action chunk |
-| RGB-only | `rgb_head`、`rgb_right_hand` | `[16,13]` action chunk |
-
-时间对齐：
+动作 label 继续使用 V3 hybrid 语义：
 
 ```text
-obs[t]   -> action[t+1 : t+17]
-obs[t+1] -> action[t+2 : t+18]
+arm target  = 实际执行的 7 维 arm joint
+hand target = 下发的 6 维 hand commanded joint target
 ```
 
-窗口 stride 为 1，相邻训练样本共享 15 个未来 action。
-
-## 模型与策略
-
-- 视觉 encoder：ImageNet 预训练 `vit_small_r26_s32_224`；
-- 两路相机共用 ViT，每路保留 49 个 spatial tokens；
-- proprio 版本将归一化 13 维 qpos 投影为一个 384 维 token；
-- action model：4 层 Transformer，`d_model=384`、`n_head=4`；
-- policy：Conditional Flow Matching；训练预测 velocity，推理使用 5 步 Euler 积分；
-- ViT 全量可训练，backbone LR 是 action head LR 的 `0.1×`；
-- EMA 权重用于独立 checkpoint 选择与 rollout 对比。
-
-仓库同时保留 RS-IMLE 和 Diffusion Policy 实现，但当前抓取主线使用 Flow Matching。不同 policy 的 loss 数值不能直接比较，最终以同协议 rollout 为准。
-
-## Wan 未来视频辅助分支
-
-`feat/v3-wan-video-aux-v1` 在原有 CFM 动作策略上增加训练期的未来视频 latent 监督，但不改变部署输入和动作输出：
+## 2. 系统架构
 
 ```text
-动作输入：rgb_head[t] + rgb_right_hand[t] + proprio[t]
-动作目标：action[t+1:t+17]（Python 半开区间）         [B,16,13]
-
-视频条件：rgb_head[t-8:t]                          9 帧
-视频目标：rgb_head[t+1:t+17]（Python 半开区间）      16 帧
-              │
-              ▼ 冻结 Wan2.2 VAE
-25 帧 latent                                          [B,48,7,14,14]
-├── condition latent                                  3 步
-└── future latent GT                                  4 步
-
-observation tokens + clean action
-              │
-              ▼ 共享 Action Transformer + Future Latent Head
-predicted future latent                               [B,48,4,14,14]
+                           ┌──────────────────────────────┐
+rgb_head[t] ──────────────►│                              │
+rgb_right_hand[t] ────────►│ ViT + proprio token encoder │
+proprio/enhanced proprio ─►│                              │
+                           └──────────────┬───────────────┘
+                                          │
+                              observation tokens [B,N,384]
+                                          │
+                     ┌────────────────────┴────────────────────┐
+                     │                                         │
+                     ▼                                         ▼
+          CFM action objective                     future-video objective
+                                                               │
+noise/action interpolation [B,16,13]       rgb_head[t-8:t+17], 25 frames
+                     │                                         │
+             Action Transformer                         frozen Wan2.2 VAE
+                     │                                         │
+       predicted velocity [B,16,13]              latent [B,48,7,14,14]
+                     │                              ├─ condition: 3 steps
+            masked action MSE                      └─ future GT: 4 steps
+                     │                                         │
+                     │                       last condition latent
+                     │                       + clean-action context
+                     │                       + 4 step embeddings
+                     │                                         │
+                     │                           Future Latent Head
+                     │                                         │
+                     │                      predicted future latent
+                     │                           [B,48,4,14,14]
+                     │                                         │
+                     │                              video latent MSE
+                     │                                         │
+                     └────────────────────┬────────────────────┘
+                                          │
+                         L_total = L_action + λ_video L_video
 ```
 
-动作分支仍使用 CFM velocity 回归：
+核心实现位于：
+
+- [`flow_matching_test/policies/video_aux.py`](flow_matching_test/policies/video_aux.py)：冻结 Wan codec、Future Latent Head 与双损失；
+- [`flow_matching_test/policies/flow_matching.py`](flow_matching_test/policies/flow_matching.py)：共享 observation tokens 和 Action Transformer features；
+- [`flow_matching_test/a2d_dataset.py`](flow_matching_test/a2d_dataset.py)：9+16 视频窗口、动作 mask 与视频 mask；
+- [`configs/a2d_450gb_v3_video_aux_cfm_a800_v1.yaml`](configs/a2d_450gb_v3_video_aux_cfm_a800_v1.yaml)：V1 配置。
+
+## 3. CFM 动作目标
+
+真实动作记为 `a`，随机高斯噪声记为 `ε`，随机时间为 `t∈(0,1]`：
 
 ```text
-a_t = (1-t) * noise + t * action
-velocity_target = action - noise
-L_action = MSE(predicted_velocity, velocity_target)
+a_t = (1-t) ε + t a
+velocity_target = a - ε
+L_action = masked_MSE(v_pred(a_t, observation, t), a - ε)
 ```
 
-视频分支使用未来 latent MSE：
+`action_mask` 会排除 episode 尾部重复 padding，只让真实 action timestep 参与动作损失。
+
+## 4. 未来视频目标
+
+Wan VAE 的时间压缩满足：
 
 ```text
-L_video = MSE(predicted_future_latent, frozen_Wan_future_latent)
-L_total = L_action + lambda_video * L_video
+latent_steps = 1 + (rgb_frames - 1) / 4
+25 RGB frames -> 7 latent steps
+9 condition frames -> 3 latent steps
+16 future frames -> 4 latent steps
 ```
 
-当前 V1 设置 `lambda_video=0.01`。这表示 loss **系数**为 `1:0.01`，不是 `1:0.1`；但系数比例不等于实际优化贡献。真实一步 smoke 得到：
+V1 从三个 condition latent 中取最后一个 `[B,48,14,14]`，再融合：
+
+- 同一组 observation tokens；
+- clean action 经过共享 Action Transformer 得到的 context；
+- 四个未来 latent timestep embedding。
+
+Future Latent Head 输出 `[B,48,4,14,14]`，与冻结 Wan VAE 产生的未来 latent GT 计算 MSE：
 
 ```text
-L_action                 0.03347
-L_video                  0.93516
-0.01 * L_video           0.00935
-L_total                  0.04282
-
-loss 数值贡献约为：
-action : weighted video = 3.58 : 1
+L_video = MSE(z_future_pred, stop_gradient(z_future_gt))
 ```
 
-如果要求某个 batch 上的目标贡献比例为 `L_action : lambda*L_video = R : 1`，可用：
+Wan VAE 全程 `no_grad`，不进入 optimizer、EMA、checkpoint 或部署 bundle。
+
+## 5. Loss 权重
+
+当前 V1：
 
 ```text
-lambda = L_action / (R * L_video)
+L_total = 1.0 * L_action + 0.01 * L_video
 ```
 
-按上述 smoke，若目标是实际贡献 `10:1`，`lambda≈0.0036`；若直接设置 `lambda=0.1`，加权视频 loss 约为 `0.0935`，会达到动作 loss 的约 `2.8×`。因此正式实验应至少比较 `0.003 / 0.01 / 0.03`，并同时观察两项独立梯度和 rollout，而不是只按名义系数判断。
-
-Wan VAE 完全冻结，不进入 optimizer、EMA 或部署 bundle。视频辅助 head 和共享 Action Transformer/视觉 encoder 接收视频梯度；CFM velocity head 只接收动作梯度。推理时仍然只运行双 RGB/proprio 条件的五步 CFM，不加载 Wan VAE，也不生成视频。
-
-尾部样本继续通过 `action_mask` 保留真实动作监督；不足 16 个真实未来视频帧时，`video_valid_mask=false`，该样本的视频 loss 为零，避免把重复 padding 当成未来 GT。
-
-该分支的在线 Wan VAE 编码只用于 smoke。正式长训前应预计算冻结 latent，否则每个 epoch 都会重复解码视频和运行 VAE。
-
-## 训练预算
-
-RGB+proprio 与 RGB-only 使用相同数据和预算，只改变 `use_proprio`：
+`0.01` 是名义系数，不代表视频分支只有动作分支 1% 的实际影响。真实一步 smoke：
 
 ```text
-batch size             32
-steps / epoch          6,876
-epochs                 100
-total steps            687,600
-warmup steps           34,380（前5轮）
-head peak LR           1e-4
-ViT peak LR            1e-5
-schedule               linear warmup + cosine decay
-seed                   42
+L_action                 = 0.03347
+L_video                  = 0.93516
+0.01 * L_video           = 0.00935
+L_total                  = 0.04282
+
+action : weighted video  ≈ 3.58 : 1
+video 占 total loss      ≈ 21.8%
 ```
 
-Sampling：
+如果直接设置 `λ_video=0.1`，同一批数据上的加权视频 loss 将约为 `0.0935`，约是动作 loss 的 `2.8×`，可能让辅助任务反过来主导动作训练。
+
+若希望某个 batch 上的 loss 数值贡献满足 `action:video = R:1`：
 
 ```text
-transition windows     16,520，train 2×
-lift windows           43,300，train 2×
-tail padded windows    train 14,715 / val 1,635
+λ_video = L_action / (R * L_video)
 ```
 
-训练集启用图像 augmentation；验证集不增强、不 oversample，并使用固定 seed。每轮记录 train/val、continuous/keyframe/lift loss、sample action MSE、EMA 指标、梯度和学习率。
+按当前 smoke，实际贡献目标为 `10:1` 时，`λ_video≈0.0036`。正式消融建议先比较：
 
-## 已完成的关键改动
-
-1. `action_offset_steps=1`：当前 observation 预测下一帧开始的 16 步动作；
-2. exact-dedup keep-last：删除完全重复的 joint frame，同时保留重复段最后一帧；
-3. tail padding + `action_mask`：保留 episode 最后 15 个窗口，padding 不参与 loss，避免丢失最终 lift；
-4. lift/transition oversampling：增加关键动作在训练中的曝光；
-5. V3 hybrid action：arm 学习实际平滑轨迹，hand 学习 commanded target；
-6. action contract：dataset、stats、checkpoint、bundle、rollout 均校验 V2/V3 语义；
-7. `use_proprio` 开关：在完全相同预算下比较 RGB+proprio 与纯 RGB；
-8. deterministic validation、EMA、watchdog 和原子 checkpoint 保存。
-9. enhanced proprio：在原 qpos token 上零初始化叠加 joint delta、previous action 与 hand target-actual error，支持从 V3 best checkpoint 兼容 warm start。
-
-详细历史见 [`CHANGE.md`](CHANGE.md)。
-
-## 训练
-
-RGB+proprio：
-
-```bash
-python3 -u -m flow_matching_test.train \
-  --config configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_100ep_scratch.yaml
+```text
+λ_video ∈ {0.003, 0.01, 0.03}
 ```
 
-纯 RGB：
+loss 数值占比不等于梯度占比；正式实验还需分别记录 action/video loss 对共享 Transformer 与 ViT 的梯度范数。
 
-```bash
-python3 -u -m flow_matching_test.train \
-  --config configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_rgb_only_100ep_scratch.yaml
+## 6. 梯度归属
+
+| 模块 | Action loss | Video loss | 状态 |
+|---|---:|---:|---|
+| ViT / observation encoder | ✓ | ✓ | 训练，backbone LR `0.1×` |
+| proprio adapters | ✓ | ✓ | 训练 |
+| Action Transformer | ✓ | ✓ | 训练 |
+| CFM velocity head | ✓ | — | 训练 |
+| Future Latent Head | — | ✓ | 从零训练 |
+| Wan2.2 VAE | — | — | 冻结、外置 |
+
+这个辅助目标的真正作用，是把“未来视觉是否合理”的梯度传回共享 observation encoder 与 Action Transformer，而不是训练 Wan VAE。
+
+## 7. 尾部与 mask
+
+动作和视频使用独立有效性规则：
+
+```text
+action_mask:
+  每个未来 action timestep 是否真实
+
+video_valid_mask:
+  是否存在完整的 16 个真实未来视频帧
 ```
 
-Enhanced proprio 20-epoch fine-tune：
+若 episode 尾部只剩若干真实动作：
 
-```bash
-python3 -u -m flow_matching_test.train \
-  --config configs/a2d_450gb_v3_enhanced_proprio_cfm_a800_20ep_init_best.yaml
+- 真实动作仍参与 `L_action`；
+- padding 动作由 `action_mask` 排除；
+- 视频张量重复最后一帧保持固定形状；
+- 整个视频目标由 `video_valid_mask=false` 排除，不把 padding 当作未来 GT。
+
+## 8. 训练与推理边界
+
+### 训练
+
+```text
+双 RGB + proprio
++ 9 帧过去 head RGB
++ 16 帧未来 head RGB
++ 16 步 action GT
+        ↓
+CFM action loss + Wan future latent loss
 ```
 
-Wan 未来视频辅助 V1 smoke/原型：
+### 推理/部署
+
+```text
+当前双 RGB + proprio
+        ↓
+CFM 从随机动作噪声开始进行 5 步 Euler/ODE 积分
+        ↓
+输出 action chunk [16,13]
+```
+
+推理路径不读取 9+16 视频窗口、不运行 Wan VAE、不调用 Future Latent Head，也不生成未来视频。因此它仍然是 action policy，而不是可递归 rollout 的完整世界模型。
+
+## 9. 环境边界
+
+动作训练环境必须保持 Python 包优先级。Wan runtime 及其 site-packages 只在 codec 首次使用时追加加载。
+
+不要把整个 WAM 虚拟环境放到训练进程 `PYTHONPATH` 最前面；已经验证过的失败包括：
+
+- 旧 NumPy 抢先加载导致 checkpoint 报 `ModuleNotFoundError: numpy._core`；
+- WAM OpenCV 抢先加载导致 `ImportError: libGL.so.1`。
+
+## 10. 当前验证状态
+
+- 全仓测试：`52 passed`；
+- 真实 Wan VAE：25 帧成功编码为 7 个 latent timestep；
+- 真实 V3 数据：9+16 窗口、尾部 mask 和动作 mask 均通过；
+- 旧 enhanced-proprio CFM checkpoint：只允许新 `video_aux_head.*` 缺失，model-only warm start 成功；
+- 一步 A800 train + val：前向、反向和指标记录成功；
+- bundle round-trip：推理不依赖 Wan VAE。
+
+详细验证边界见 [`docs/WAN_VIDEO_AUX_V1.md`](docs/WAN_VIDEO_AUX_V1.md)。
+
+## 11. 运行
+
+原型配置：
 
 ```bash
 python3 -u -m flow_matching_test.train \
   --config configs/a2d_450gb_v3_video_aux_cfm_a800_v1.yaml
 ```
 
-重要产物：
+当前实现会在线解码 25 帧并运行 Wan VAE，只适合 smoke 和短实验。正式长训前应先预计算冻结的 Wan latent，并保存 dataset/split/checkpoint provenance，否则每个 epoch 重复运行 VAE 会成为主要性能瓶颈。
 
-```text
-metrics.jsonl
-latest.ckpt
-best_val_loss.ckpt
-best_action_mse.ckpt
-best_ema_action_mse.ckpt
-summary.json
-```
+## 12. 下一步实验
 
-部署时优先测试 action-MSE checkpoint，不默认最后一轮最好。部署 bundle 会记录 action 语义、raw/EMA 权重、epoch/step、数据版本及 SHA256；bundle 不包含 optimizer，不能用于完整 resume。
-
-## 文档
-
-- [`CHANGE.md`](CHANGE.md)：倒序更新记录；
-- [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：数据、padding、mask 与 oversampling；
-- [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR；
-- [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练与停止判断；
-- [`docs/ENHANCED_PROPRIO.md`](docs/ENHANCED_PROPRIO.md)：动态 proprio 输入、warm start 与训练预算；
-- [`docs/V3_DIFFUSION_SCALED_LINEAR.md`](docs/V3_DIFFUSION_SCALED_LINEAR.md)：V3 DP scaled-linear schedule、监控与匹配预算；
-- [`docs/WAN_VIDEO_AUX_V1.md`](docs/WAN_VIDEO_AUX_V1.md)：冻结 Wan VAE 的 9+16 视频辅助目标、mask 与运行边界；
-- [`artifacts_index.md`](artifacts_index.md)：外部训练和部署产物索引。
-
-训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git。
+1. 离线预计算 9+16 Wan latent；
+2. 增加 action/video 分别作用于共享网络的梯度范数日志；
+3. 以相同 CFM checkpoint、数据、step budget 比较 `λ={0,0.003,0.01,0.03}`；
+4. 同协议比较 action MSE、lift 指标与闭环抓取成功率；
+5. 只有辅助分支证明有效后，再决定是否升级为联合视频—动作 Flow Matching WAM。
