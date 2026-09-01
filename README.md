@@ -1,5 +1,7 @@
 # Flow Matching Test
 
+> **分支职责：**`feat/task-level-grasp-retry` 只维护推理侧抓取验证、恢复和重新尝试状态机；它不是第五条训练 policy，也不改变 CFM/DP/IMLE/Video-Aux 的训练 loss。四条训练路线与当前正式 run 见 [`main` 总 README](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/main)。
+
 基于 A2D 机器人抓取数据训练连续关节动作策略。当前主线是双 RGB、可选 proprio 条件的 Flow Matching，输出未来 16 步绝对 joint action。
 
 ## 数据
