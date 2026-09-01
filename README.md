@@ -57,6 +57,69 @@ obs[t+1] -> action[t+2 : t+18]
 
 仓库同时保留 RS-IMLE 和 Diffusion Policy 实现，但当前抓取主线使用 Flow Matching。不同 policy 的 loss 数值不能直接比较，最终以同协议 rollout 为准。
 
+## Wan 未来视频辅助分支
+
+`feat/v3-wan-video-aux-v1` 在原有 CFM 动作策略上增加训练期的未来视频 latent 监督，但不改变部署输入和动作输出：
+
+```text
+动作输入：rgb_head[t] + rgb_right_hand[t] + proprio[t]
+动作目标：action[t+1:t+17]（Python 半开区间）         [B,16,13]
+
+视频条件：rgb_head[t-8:t]                          9 帧
+视频目标：rgb_head[t+1:t+17]（Python 半开区间）      16 帧
+              │
+              ▼ 冻结 Wan2.2 VAE
+25 帧 latent                                          [B,48,7,14,14]
+├── condition latent                                  3 步
+└── future latent GT                                  4 步
+
+observation tokens + clean action
+              │
+              ▼ 共享 Action Transformer + Future Latent Head
+predicted future latent                               [B,48,4,14,14]
+```
+
+动作分支仍使用 CFM velocity 回归：
+
+```text
+a_t = (1-t) * noise + t * action
+velocity_target = action - noise
+L_action = MSE(predicted_velocity, velocity_target)
+```
+
+视频分支使用未来 latent MSE：
+
+```text
+L_video = MSE(predicted_future_latent, frozen_Wan_future_latent)
+L_total = L_action + lambda_video * L_video
+```
+
+当前 V1 设置 `lambda_video=0.01`。这表示 loss **系数**为 `1:0.01`，不是 `1:0.1`；但系数比例不等于实际优化贡献。真实一步 smoke 得到：
+
+```text
+L_action                 0.03347
+L_video                  0.93516
+0.01 * L_video           0.00935
+L_total                  0.04282
+
+loss 数值贡献约为：
+action : weighted video = 3.58 : 1
+```
+
+如果要求某个 batch 上的目标贡献比例为 `L_action : lambda*L_video = R : 1`，可用：
+
+```text
+lambda = L_action / (R * L_video)
+```
+
+按上述 smoke，若目标是实际贡献 `10:1`，`lambda≈0.0036`；若直接设置 `lambda=0.1`，加权视频 loss 约为 `0.0935`，会达到动作 loss 的约 `2.8×`。因此正式实验应至少比较 `0.003 / 0.01 / 0.03`，并同时观察两项独立梯度和 rollout，而不是只按名义系数判断。
+
+Wan VAE 完全冻结，不进入 optimizer、EMA 或部署 bundle。视频辅助 head 和共享 Action Transformer/视觉 encoder 接收视频梯度；CFM velocity head 只接收动作梯度。推理时仍然只运行双 RGB/proprio 条件的五步 CFM，不加载 Wan VAE，也不生成视频。
+
+尾部样本继续通过 `action_mask` 保留真实动作监督；不足 16 个真实未来视频帧时，`video_valid_mask=false`，该样本的视频 loss 为零，避免把重复 padding 当成未来 GT。
+
+该分支的在线 Wan VAE 编码只用于 smoke。正式长训前应预计算冻结 latent，否则每个 epoch 都会重复解码视频和运行 VAE。
+
 ## 训练预算
 
 RGB+proprio 与 RGB-only 使用相同数据和预算，只改变 `use_proprio`：
@@ -120,6 +183,13 @@ python3 -u -m flow_matching_test.train \
   --config configs/a2d_450gb_v3_enhanced_proprio_cfm_a800_20ep_init_best.yaml
 ```
 
+Wan 未来视频辅助 V1 smoke/原型：
+
+```bash
+python3 -u -m flow_matching_test.train \
+  --config configs/a2d_450gb_v3_video_aux_cfm_a800_v1.yaml
+```
+
 重要产物：
 
 ```text
@@ -141,6 +211,7 @@ summary.json
 - [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练与停止判断；
 - [`docs/ENHANCED_PROPRIO.md`](docs/ENHANCED_PROPRIO.md)：动态 proprio 输入、warm start 与训练预算；
 - [`docs/V3_DIFFUSION_SCALED_LINEAR.md`](docs/V3_DIFFUSION_SCALED_LINEAR.md)：V3 DP scaled-linear schedule、监控与匹配预算；
+- [`docs/WAN_VIDEO_AUX_V1.md`](docs/WAN_VIDEO_AUX_V1.md)：冻结 Wan VAE 的 9+16 视频辅助目标、mask 与运行边界；
 - [`artifacts_index.md`](artifacts_index.md)：外部训练和部署产物索引。
 
 训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git。
