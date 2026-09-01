@@ -1,8 +1,12 @@
 # A2D CFM + Wan Future-Video Auxiliary V1
 
+> **分支职责：**本 README 只描述 `feat/v3-wan-video-aux-v1` 世界模型原型。四条策略路线、共享数据契约和当前正式训练记录见 [`main` 总 README](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/main)。
+
 本分支 `feat/v3-wan-video-aux-v1` 专门验证一件事：在已经可用的 A2D Conditional Flow Matching 动作策略上，加入冻结 Wan2.2 VAE 的未来视频 latent 辅助监督，是否能让策略形成更强的动作后果表征，并最终提高抓取 rollout 成功率。
 
 它是一个 **action policy + future-video auxiliary loss**，不是完整的联合视频—动作 WAM。训练时使用视频监督；部署时仍然只输入双相机 RGB 与 proprio，只输出 16 步关节动作，不生成视频、不加载 Wan VAE。
+
+当前状态：实现、全仓测试、真实 Wan VAE 和一批 train+val smoke 已通过；尚未启动正式长训。2026-09-01 启动的 654-episode b23v2 run 是标准 CFM baseline，不是本世界模型分支的训练结果。
 
 ## 1. 数据契约
 
