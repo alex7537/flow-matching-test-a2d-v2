@@ -6,7 +6,7 @@
 
 它是一个 **action policy + future-video auxiliary loss**，不是完整的联合视频—动作 WAM。训练时使用视频监督；部署时仍然只输入双相机 RGB 与 proprio，只输出 16 步关节动作，不生成视频、不加载 Wan VAE。
 
-当前状态：实现、全仓测试、真实 Wan VAE 和一批 train+val smoke 已通过；尚未启动正式长训。2026-09-01 启动的 654-episode b23v2 run 是标准 CFM baseline，不是本世界模型分支的训练结果。
+当前状态：在线原型和离线 cached-latent 后训练链路均已实现；全仓测试、真实 Wan VAE 和一批 train+val smoke 已通过。当前等待 box300+bottle300 混合任务 CFM 训练结束，再用它的 checkpoint 做 model-only post-training；尚未启动世界模型正式长训。
 
 ## 1. 数据契约
 
@@ -16,7 +16,7 @@
 |---|---|---:|---|
 | `rgb_head[t]` | 当前帧 | `[B,1,3,224,224]` | 动作 observation |
 | `rgb_right_hand[t]` | 当前帧 | `[B,1,3,224,224]` | 动作 observation |
-| proprio | 当前实际 joint 与增强状态 | token dim `384` | 动作 observation |
+| proprio | 当前实际 13 维 joint state | token dim `384` | 动作 observation |
 | action GT | `action[t+1:t+17]` | `[B,16,13]` | CFM velocity 监督 |
 | video condition | `rgb_head[t-8:t+1]` | `[B,9,3,224,224]` | Wan 过去视频条件 |
 | video future GT | `rgb_head[t+1:t+17]` | `[B,16,3,224,224]` | 未来视频 latent 监督 |
@@ -74,8 +74,9 @@ noise/action interpolation [B,16,13]       rgb_head[t-8:t+17], 25 frames
 
 - [`flow_matching_test/policies/video_aux.py`](flow_matching_test/policies/video_aux.py)：冻结 Wan codec、Future Latent Head 与双损失；
 - [`flow_matching_test/policies/flow_matching.py`](flow_matching_test/policies/flow_matching.py)：共享 observation tokens 和 Action Transformer features；
-- [`flow_matching_test/a2d_dataset.py`](flow_matching_test/a2d_dataset.py)：9+16 视频窗口、动作 mask 与视频 mask；
-- [`configs/a2d_450gb_v3_video_aux_cfm_a800_v1.yaml`](configs/a2d_450gb_v3_video_aux_cfm_a800_v1.yaml)：V1 配置。
+- [`flow_matching_test/a2d_dataset.py`](flow_matching_test/a2d_dataset.py)：9+16 视频窗口、cached latent、动作 mask 与视频 mask；
+- [`scripts/precompute_wan_video_latents.py`](scripts/precompute_wan_video_latents.py)：可断点复用的离线 Wan latent cache；
+- [`configs/a2d_v3_multitask_video_aux_posttrain_10ep.yaml`](configs/a2d_v3_multitask_video_aux_posttrain_10ep.yaml)：混合任务后训练配置。
 
 ## 3. CFM 动作目标
 
@@ -218,10 +219,10 @@ CFM 从随机动作噪声开始进行 5 步 Euler/ODE 积分
 
 ## 10. 当前验证状态
 
-- 全仓测试：`52 passed`；
+- 全仓测试：`55 passed`；
 - 真实 Wan VAE：25 帧成功编码为 7 个 latent timestep；
 - 真实 V3 数据：9+16 窗口、尾部 mask 和动作 mask 均通过；
-- 旧 enhanced-proprio CFM checkpoint：只允许新 `video_aux_head.*` 缺失，model-only warm start 成功；
+- CFM checkpoint 升级：只允许新 `video_aux_head.*` 缺失，model-only warm start 成功；
 - 一步 A800 train + val：前向、反向和指标记录成功；
 - bundle round-trip：推理不依赖 Wan VAE。
 
@@ -229,19 +230,32 @@ CFM 从随机动作噪声开始进行 5 步 Euler/ODE 积分
 
 ## 11. 运行
 
-原型配置：
+在线原型配置（只用于 smoke）：
 
 ```bash
 python3 -u -m flow_matching_test.train \
   --config configs/a2d_450gb_v3_video_aux_cfm_a800_v1.yaml
 ```
 
-当前实现会在线解码 25 帧并运行 Wan VAE，只适合 smoke 和短实验。正式长训前应先预计算冻结的 Wan latent，并保存 dataset/split/checkpoint provenance，否则每个 epoch 重复运行 VAE 会成为主要性能瓶颈。
+正式后训练先在空闲 A800 上生成约 84,771 个有效窗口（未压缩 fp16 约 7.43 GiB）：
+
+```bash
+bash scripts/precompute_multitask_wan_latents.sh
+```
+
+混合任务 CFM 训练完成后，只需传入选定 checkpoint：
+
+```bash
+bash scripts/launch_multitask_wan_video_aux_posttrain.sh \
+  /absolute/path/to/best_action_mse.ckpt
+```
+
+这是 model-only init：继承模型权重，新建 video head，并重新建立 optimizer、5% warmup 与 10-epoch cosine schedule；不是从零训练，也不是恢复旧 optimizer/scheduler 的 resume。
 
 ## 12. 下一步实验
 
-1. 离线预计算 9+16 Wan latent；
-2. 增加 action/video 分别作用于共享网络的梯度范数日志；
-3. 以相同 CFM checkpoint、数据、step budget 比较 `λ={0,0.003,0.01,0.03}`；
-4. 同协议比较 action MSE、lift 指标与闭环抓取成功率；
-5. 只有辅助分支证明有效后，再决定是否升级为联合视频—动作 Flow Matching WAM。
+1. 等当前混合 CFM 结束后，在空闲 A800 生成完整 latent cache 并做一批 cached train+val smoke；
+2. 用选定 mixed-CFM checkpoint 启动 `λ=0.01` 的 10-epoch 后训练；
+3. 增加 action/video 分别作用于共享网络的梯度范数日志；
+4. 以相同 checkpoint、数据、step budget 比较 `λ={0,0.003,0.01,0.03}`；
+5. 同协议比较 action MSE、lift 指标与闭环抓取成功率；只有辅助分支证明有效后，再决定是否升级为联合视频—动作 Flow Matching WAM。

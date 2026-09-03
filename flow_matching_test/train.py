@@ -194,6 +194,7 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
         video_condition_steps=int(data_cfg.get("video_condition_steps", 9)),
         video_future_steps=int(data_cfg.get("video_future_steps", 16)),
         video_future_offset_steps=int(data_cfg.get("video_future_offset_steps", 1)),
+        video_latent_cache_dir=data_cfg.get("video_latent_cache_dir"),
         include_tail_padded_windows=bool(
             data_cfg.get("include_tail_padded_windows", False)
         ),
@@ -663,6 +664,14 @@ def main() -> None:
         "video_condition_steps": train_dataset.cfg.video_condition_steps,
         "video_future_steps": train_dataset.cfg.video_future_steps,
         "video_future_offset_steps": train_dataset.cfg.video_future_offset_steps,
+        "video_latent_cache_manifest_sha256": (
+            hashlib.sha256(
+                (Path(str(train_dataset.cfg.video_latent_cache_dir)) / "video_latent_manifest.json")
+                .read_bytes()
+            ).hexdigest()
+            if train_dataset.cfg.video_latent_cache_dir
+            else None
+        ),
         "dataset_manifest_sha256": split_manifest.get("dataset_manifest_sha256"),
         "split_manifest_sha256": split_manifest.get("split_manifest_sha256"),
     }

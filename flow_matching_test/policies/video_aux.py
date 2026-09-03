@@ -243,16 +243,23 @@ class VideoAuxFlowMatchingPolicy(FlowMatchingPolicy):
         valid_mask = batch.get("video_valid_mask")
         condition = batch.get("video_condition")
         future = batch.get("video_future")
+        cached_condition = batch.get("video_condition_latent")
+        cached_future = batch.get("video_future_latent")
         clean_action = batch.get("action")
-        if not all(isinstance(value, torch.Tensor) for value in (valid_mask, condition, future, clean_action)):
+        raw_available = isinstance(condition, torch.Tensor) and isinstance(future, torch.Tensor)
+        cache_available = isinstance(cached_condition, torch.Tensor) and isinstance(
+            cached_future, torch.Tensor
+        )
+        if not isinstance(valid_mask, torch.Tensor) or not isinstance(clean_action, torch.Tensor):
             raise KeyError(
-                "video auxiliary policy requires video_condition, video_future, "
-                "video_valid_mask, and action tensors"
+                "video auxiliary policy requires video_valid_mask and action tensors"
+            )
+        if raw_available == cache_available:
+            raise KeyError(
+                "video auxiliary policy requires exactly one target source: raw "
+                "video_condition/video_future or cached video_condition_latent/video_future_latent"
             )
         assert isinstance(valid_mask, torch.Tensor)
-        assert isinstance(condition, torch.Tensor)
-        assert isinstance(future, torch.Tensor)
-        assert isinstance(clean_action, torch.Tensor)
         valid = valid_mask.bool().reshape(-1)
         if valid.shape[0] != clean_action.shape[0]:
             raise ValueError("video_valid_mask must have one value per batch sample")
@@ -265,14 +272,30 @@ class VideoAuxFlowMatchingPolicy(FlowMatchingPolicy):
                     "video_aux_weighted_loss": 0.0,
                     "video_aux_valid_fraction": valid_fraction,
                     "video_aux_target_std": None,
+                    "video_aux_cached_targets": float(cache_available),
                 }
             )
             return action_loss + video_loss, metrics
 
-        condition_last, future_target = self.video_codec.encode_condition_future(
-            condition[valid],
-            future[valid],
-        )
+        if cache_available:
+            assert isinstance(cached_condition, torch.Tensor)
+            assert isinstance(cached_future, torch.Tensor)
+            condition_last = cached_condition[valid].float()
+            future_target = cached_future[valid].float()
+            if condition_last.ndim != 4 or future_target.ndim != 5:
+                raise ValueError("cached video latents must be [B,C,H,W] and [B,C,T,H,W]")
+            if condition_last.shape[1] != self.video_aux_head.latent_channels:
+                raise ValueError("cached condition latent channels do not match video head")
+            if future_target.shape[1] != self.video_aux_head.latent_channels:
+                raise ValueError("cached future latent channels do not match video head")
+            if future_target.shape[2] != self.video_aux_head.future_steps:
+                raise ValueError("cached future latent steps do not match video head")
+        else:
+            assert isinstance(condition, torch.Tensor)
+            assert isinstance(future, torch.Tensor)
+            condition_last, future_target = self.video_codec.encode_condition_future(
+                condition[valid], future[valid]
+            )
         teacher_features = self._features_from_cond_tokens(
             noisy_action=clean_action[valid],
             cond_tokens=cond_tokens[valid],
@@ -296,6 +319,7 @@ class VideoAuxFlowMatchingPolicy(FlowMatchingPolicy):
                 "video_aux_weighted_loss": float(weighted.detach().item()),
                 "video_aux_valid_fraction": valid_fraction,
                 "video_aux_target_std": float(future_target.float().std().detach().item()),
+                "video_aux_cached_targets": float(cache_available),
             }
         )
         return action_loss + weighted, metrics

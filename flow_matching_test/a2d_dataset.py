@@ -83,6 +83,7 @@ class A2DConfig:
     video_condition_steps: int = 9
     video_future_steps: int = 16
     video_future_offset_steps: int = 1
+    video_latent_cache_dir: str | None = None
     include_tail_padded_windows: bool = False
     transition_oversample_factor: int = 1
     lift_oversample_factor: int = 1
@@ -465,6 +466,12 @@ class A2DFlowDataset(Dataset):
         self.stats = norm_stats
         self.train = train
         self.epoch = 0
+        self.video_latent_manifest: dict | None = None
+        self._video_latent_records: dict[str, dict] = {}
+        self._video_condition_latent_shape: tuple[int, ...] = ()
+        self._video_future_latent_shape: tuple[int, ...] = ()
+        if cfg.video_aux_enabled and cfg.video_latent_cache_dir:
+            self._configure_video_latent_cache()
         # flat sample index: (ep_idx, t); every t with a full history is valid
         self.samples: list[tuple[int, int]] = []
         h = max(
@@ -484,6 +491,7 @@ class A2DFlowDataset(Dataset):
         # Per-worker lazy LRU handles — NEVER open h5py.File before fork. Keep
         # this bounded because large datasets can exceed the worker fd limit.
         self._handles: OrderedDict[int, h5py.File] = OrderedDict()
+        self._video_latent_handles: OrderedDict[int, h5py.File] = OrderedDict()
 
     def __len__(self):
         return len(self.samples)
@@ -505,11 +513,145 @@ class A2DFlowDataset(Dataset):
         self._handles[ep_idx] = f
         return f
 
-    def close(self) -> None:
-        handles = getattr(self, "_handles", None)
-        while handles:
-            _, handle = handles.popitem(last=False)
+    def _configure_video_latent_cache(self) -> None:
+        cfg = self.cfg
+        cache_dir = Path(str(cfg.video_latent_cache_dir)).expanduser().resolve()
+        manifest_path = cache_dir / "video_latent_manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"video latent manifest not found: {manifest_path}")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if int(manifest.get("schema_version", -1)) != 1:
+            raise ValueError("unsupported video latent cache schema")
+        expected = {
+            "video_key": cfg.video_key,
+            "image_size": cfg.image_size,
+            "condition_steps": cfg.video_condition_steps,
+            "future_steps": cfg.video_future_steps,
+            "future_offset_steps": cfg.video_future_offset_steps,
+        }
+        for key, value in expected.items():
+            if manifest.get(key) != value:
+                raise ValueError(
+                    f"video latent cache {key} mismatch: "
+                    f"expected {value!r}, got {manifest.get(key)!r}"
+                )
+        if not cfg.dataset_manifest:
+            raise ValueError("cached video latents require a dataset_manifest")
+        dataset_manifest_path = Path(cfg.data_dir) / cfg.dataset_manifest
+        actual_dataset_sha = hashlib.sha256(dataset_manifest_path.read_bytes()).hexdigest()
+        if manifest.get("dataset_manifest_sha256") != actual_dataset_sha:
+            raise ValueError("video latent cache does not match the current dataset manifest")
+        records = manifest.get("episodes")
+        if not isinstance(records, list):
+            raise ValueError("video latent manifest episodes must be a list")
+        records_by_name = {
+            str(record.get("source_file_name")): record
+            for record in records
+            if isinstance(record, dict) and record.get("source_file_name")
+        }
+        if len(records_by_name) != len(records):
+            raise ValueError("video latent manifest contains invalid or duplicate episode records")
+        for episode in self.episodes:
+            name = str(episode["file_name"])
+            record = records_by_name.get(name)
+            if record is None:
+                raise ValueError(f"video latent cache is missing episode {name}")
+            if record.get("source_content_hash") != episode.get("content_hash"):
+                raise ValueError(f"video latent cache source hash mismatch for {name}")
+            expected_first = cfg.video_condition_steps - 1
+            expected_last = (
+                int(episode["length"])
+                - cfg.video_future_offset_steps
+                - cfg.video_future_steps
+            )
+            expected_windows = max(0, expected_last - expected_first + 1)
+            if (
+                int(record.get("first_anchor_t", -1)) != expected_first
+                or int(record.get("last_anchor_t", -1)) != expected_last
+                or int(record.get("num_windows", -1)) != expected_windows
+            ):
+                raise ValueError(f"video latent cache window contract mismatch for {name}")
+            cache_path = cache_dir / str(record.get("cache_file_name", ""))
+            if not cache_path.is_file():
+                raise FileNotFoundError(f"video latent cache file not found: {cache_path}")
+            record["cache_path"] = str(cache_path)
+        condition_shape = tuple(int(value) for value in manifest.get("condition_latent_shape", []))
+        future_shape = tuple(int(value) for value in manifest.get("future_latent_shape", []))
+        if len(condition_shape) != 3 or len(future_shape) != 4:
+            raise ValueError("video latent manifest contains invalid latent shapes")
+        if condition_shape[0] != future_shape[0]:
+            raise ValueError("condition/future latent channels do not match")
+        self.video_latent_manifest = manifest
+        self._video_latent_records = records_by_name
+        self._video_condition_latent_shape = condition_shape
+        self._video_future_latent_shape = future_shape
+
+    def _video_latent_file(self, ep_idx: int) -> h5py.File:
+        handle = self._video_latent_handles.get(ep_idx)
+        if handle is not None:
+            self._video_latent_handles.move_to_end(ep_idx)
+            return handle
+        if len(self._video_latent_handles) >= self.cfg.max_open_hdf5_files:
+            _, oldest = self._video_latent_handles.popitem(last=False)
+            oldest.close()
+        episode_name = str(self.episodes[ep_idx]["file_name"])
+        path = self._video_latent_records[episode_name]["cache_path"]
+        handle = h5py.File(path, "r", libver="latest", swmr=True)
+        record = self._video_latent_records[episode_name]
+        if str(handle.attrs.get("source_content_hash", "")) != str(
+            record["source_content_hash"]
+        ):
             handle.close()
+            raise ValueError(f"cached latent file source hash mismatch for {episode_name}")
+        expected_contract_sha = str(
+            (self.video_latent_manifest or {}).get("cache_contract_sha256", "")
+        )
+        if expected_contract_sha and str(
+            handle.attrs.get("cache_contract_sha256", "")
+        ) != expected_contract_sha:
+            handle.close()
+            raise ValueError(f"cached latent file contract mismatch for {episode_name}")
+        expected_windows = int(record["num_windows"])
+        if (
+            handle["condition_last"].shape
+            != (expected_windows, *self._video_condition_latent_shape)
+            or handle["future_target"].shape
+            != (expected_windows, *self._video_future_latent_shape)
+        ):
+            handle.close()
+            raise ValueError(f"cached latent file tensor shape mismatch for {episode_name}")
+        self._video_latent_handles[ep_idx] = handle
+        return handle
+
+    def _load_cached_video_latents(
+        self, ep_idx: int, anchor_t: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        episode_name = str(self.episodes[ep_idx]["file_name"])
+        record = self._video_latent_records[episode_name]
+        first_anchor = int(record["first_anchor_t"])
+        last_anchor = int(record["last_anchor_t"])
+        if anchor_t < first_anchor or anchor_t > last_anchor:
+            return (
+                torch.zeros(self._video_condition_latent_shape, dtype=torch.float32),
+                torch.zeros(self._video_future_latent_shape, dtype=torch.float32),
+                torch.tensor(False, dtype=torch.bool),
+            )
+        row = anchor_t - first_anchor
+        handle = self._video_latent_file(ep_idx)
+        condition = np.asarray(handle["condition_last"][row], dtype=np.float32)
+        future = np.asarray(handle["future_target"][row], dtype=np.float32)
+        if condition.shape != self._video_condition_latent_shape:
+            raise ValueError(f"cached condition latent shape mismatch for {episode_name}")
+        if future.shape != self._video_future_latent_shape:
+            raise ValueError(f"cached future latent shape mismatch for {episode_name}")
+        return torch.from_numpy(condition), torch.from_numpy(future), torch.tensor(True)
+
+    def close(self) -> None:
+        for attribute in ("_handles", "_video_latent_handles"):
+            handles = getattr(self, attribute, None)
+            while handles:
+                _, handle = handles.popitem(last=False)
+                handle.close()
 
     def __del__(self) -> None:
         self.close()
@@ -572,11 +714,10 @@ class A2DFlowDataset(Dataset):
             int(cfg.seed) * 1_000_003 + self.epoch * 100_003 + int(idx)
         ) % (2**63 - 1)
         rng = np.random.default_rng(augmentation_seed)
-        augmented_cameras = tuple(
-            dict.fromkeys(
-                (*cfg.image_keys, cfg.video_key) if cfg.video_aux_enabled else cfg.image_keys
-            )
-        )
+        needs_raw_video = cfg.video_aux_enabled and not cfg.video_latent_cache_dir
+        augmented_cameras = tuple(dict.fromkeys(
+            (*cfg.image_keys, cfg.video_key) if needs_raw_video else cfg.image_keys
+        ))
         aug_params = {cam: self._sample_aug_params(rng) for cam in augmented_cameras}
 
         # images: history frames per camera, shared aug params per sample is
@@ -614,35 +755,40 @@ class A2DFlowDataset(Dataset):
             "action_mask": torch.from_numpy(mask),
         }
         if cfg.video_aux_enabled:
-            condition_start = t - cfg.video_condition_steps + 1
-            condition_frames = []
-            for frame_idx in range(condition_start, t + 1):
-                image = self._load_frame(ep_idx, cfg.video_key, frame_idx)
-                image = self._resize_aug(image, aug_params[cfg.video_key])
-                condition_frames.append(torch.from_numpy(image).permute(2, 0, 1))
+            if cfg.video_latent_cache_dir:
+                condition_latent, future_latent, valid = self._load_cached_video_latents(ep_idx, t)
+                result.update({
+                    "video_condition_latent": condition_latent,
+                    "video_future_latent": future_latent,
+                    "video_valid_mask": valid,
+                })
+            else:
+                condition_start = t - cfg.video_condition_steps + 1
+                condition_frames = []
+                for frame_idx in range(condition_start, t + 1):
+                    image = self._load_frame(ep_idx, cfg.video_key, frame_idx)
+                    image = self._resize_aug(image, aug_params[cfg.video_key])
+                    condition_frames.append(torch.from_numpy(image).permute(2, 0, 1))
 
-            video_start = t + cfg.video_future_offset_steps
-            video_end = min(video_start + cfg.video_future_steps, T)
-            future_frames = []
-            for frame_idx in range(video_start, video_end):
-                image = self._load_frame(ep_idx, cfg.video_key, frame_idx)
-                image = self._resize_aug(image, aug_params[cfg.video_key])
-                future_frames.append(torch.from_numpy(image).permute(2, 0, 1))
-            valid_future_steps = len(future_frames)
-            if valid_future_steps <= 0:
-                raise RuntimeError("video auxiliary sample has no real future frame")
-            while len(future_frames) < cfg.video_future_steps:
-                future_frames.append(future_frames[-1].clone())
-            result.update(
-                {
+                video_start = t + cfg.video_future_offset_steps
+                video_end = min(video_start + cfg.video_future_steps, T)
+                future_frames = []
+                for frame_idx in range(video_start, video_end):
+                    image = self._load_frame(ep_idx, cfg.video_key, frame_idx)
+                    image = self._resize_aug(image, aug_params[cfg.video_key])
+                    future_frames.append(torch.from_numpy(image).permute(2, 0, 1))
+                valid_future_steps = len(future_frames)
+                if valid_future_steps <= 0:
+                    raise RuntimeError("video auxiliary sample has no real future frame")
+                while len(future_frames) < cfg.video_future_steps:
+                    future_frames.append(future_frames[-1].clone())
+                result.update({
                     "video_condition": torch.stack(condition_frames),
                     "video_future": torch.stack(future_frames),
                     "video_valid_mask": torch.tensor(
-                        valid_future_steps == cfg.video_future_steps,
-                        dtype=torch.bool,
+                        valid_future_steps == cfg.video_future_steps, dtype=torch.bool
                     ),
-                }
-            )
+                })
         if cfg.enhanced_proprio:
             current_state = f[cfg.obs_group][cfg.state_key][t].astype(np.float32)
             previous_state = f[cfg.obs_group][cfg.state_key][t - 1].astype(np.float32)
@@ -798,13 +944,18 @@ class A2DProcessedWindowDataset(A2DFlowDataset):
             "sample_index": torch.tensor(idx, dtype=torch.long),
         }
         if self.cfg.video_aux_enabled:
-            result.update(
-                {
+            if self.cfg.video_latent_cache_dir:
+                result.update({
+                    "video_condition_latent": sample["video_condition_latent"],
+                    "video_future_latent": sample["video_future_latent"],
+                    "video_valid_mask": sample["video_valid_mask"],
+                })
+            else:
+                result.update({
                     "video_condition": sample["video_condition"] * 2.0 - 1.0,
                     "video_future": sample["video_future"] * 2.0 - 1.0,
                     "video_valid_mask": sample["video_valid_mask"],
-                }
-            )
+                })
         return result
 
     def export_stats(self) -> dict[str, torch.Tensor]:

@@ -2,6 +2,13 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-09-03｜混合任务 CFM → Wan 视频辅助后训练链路
+
+- 新增 dataset/VAE/时序合同绑定的离线 Wan latent cache，支持逐 episode 原子写入、断点复用和错源拒绝。
+- Dataset 和 policy 可直接读取 `[48,14,14] + [48,4,14,14]` cached targets；正式训练不再逐 batch 运行冻结 VAE，尾部不完整视频窗口只保留 action loss。
+- 新增 box300+bottle300 混合任务 10-epoch model-only post-training 配置与单参数 checkpoint 启动脚本；optimizer、warmup 和 cosine schedule 重新建立，不误用 resume。
+- 本机隔离环境全套测试 `55 passed`；真实 A800 cache 生成和后训练 smoke 等当前混合 CFM 训练结束后执行。
+
 ## 2026-08-24｜V3 Diffusion scaled-linear 正式基线准备
 
 - 为 DP/RS-IMLE 补齐按 val sample 固定的 loss/sampling RNG，避免随机验证影响 best checkpoint 选择。

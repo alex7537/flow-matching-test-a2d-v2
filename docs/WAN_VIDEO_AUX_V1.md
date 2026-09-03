@@ -46,6 +46,45 @@ auxiliary predictive policy, not the full joint video/action denoising WAM.
 not prepend the WAM environment to `PYTHONPATH`: that can replace the training
 environment's NumPy/OpenCV before checkpoints and datasets are loaded.
 
-On-the-fly VAE encoding is intended only for smoke tests. Formal training must
-materialize frozen video latents offline; otherwise every epoch repeatedly
-decodes JPEG clips and runs the 2.8 GB VAE.
+On-the-fly VAE encoding is intended only for smoke tests. Formal training uses
+`scripts/precompute_wan_video_latents.py` to materialize frozen video latents
+offline; otherwise every epoch repeatedly decodes JPEG clips and runs the 2.8
+GB VAE. The cache is bound to the dataset-manifest SHA, episode content hashes,
+the VAE SHA, camera key, resize rule, and the 9+16 temporal contract. Incomplete
+tail windows keep their action loss but receive zero video loss.
+
+The cache deliberately uses deterministic resize-only video targets. RGB policy
+observations keep their normal train augmentation, while the auxiliary target
+does not move randomly between epochs.
+
+## Mixed-task post-training
+
+The prepared route upgrades a finished base CFM checkpoint; it is not scratch
+training and not optimizer/scheduler resume:
+
+```text
+finished mixed-task CFM checkpoint
+  -> model-only init (shared action policy weights)
+  -> randomly initialized video auxiliary head
+  -> new optimizer, warmup, and cosine schedule
+  -> 10 epochs on the same frozen train/val split
+```
+
+Build the cache once on an idle A800:
+
+```bash
+bash scripts/precompute_multitask_wan_latents.sh
+```
+
+After the mixed-task checkpoint is available, only its path is required:
+
+```bash
+bash scripts/launch_multitask_wan_video_aux_posttrain.sh \
+  /absolute/path/to/best_action_mse.ckpt
+```
+
+`init_from` validates action semantics, action offset, statistics digest, and
+dataset/split manifest hashes before loading. It resets optimizer and scheduler
+state by design. The exported deployment bundle contains the trained action
+policy and auxiliary head state, but inference still consumes only RGB and
+proprio; neither future frames nor the external Wan VAE are runtime inputs.

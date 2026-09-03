@@ -27,6 +27,91 @@ from scripts.ingest_a2d import admission_reason
 
 
 class DataContractTest(unittest.TestCase):
+    def test_video_aux_can_read_dataset_bound_cached_latents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "episode.hdf5"
+            length = 30
+            source_hash = "source-content-hash"
+            values = np.zeros((length, 13), dtype=np.float32)
+            with h5py.File(source_path, "w") as file:
+                observations = file.create_group("observations")
+                observations.create_dataset("qpos", data=values)
+                observations.create_dataset(
+                    "rgb_head", data=np.zeros((length, 4, 4, 3), dtype=np.uint8)
+                )
+                file.create_dataset("action", data=values)
+            dataset_manifest_path = root / "dataset_manifest.json"
+            dataset_manifest_path.write_text('{"episodes": []}\n', encoding="utf-8")
+            cache_dir = root / "latents"
+            cache_dir.mkdir()
+            cache_path = cache_dir / "episode.wan_latents.hdf5"
+            with h5py.File(cache_path, "w") as file:
+                file.attrs["source_content_hash"] = source_hash
+                file.create_dataset(
+                    "condition_last", data=np.full((6, 2, 2, 2), 3, dtype=np.float16)
+                )
+                file.create_dataset(
+                    "future_target", data=np.full((6, 2, 4, 2, 2), 5, dtype=np.float16)
+                )
+            cache_manifest = {
+                "schema_version": 1,
+                "dataset_manifest_sha256": hashlib.sha256(
+                    dataset_manifest_path.read_bytes()
+                ).hexdigest(),
+                "video_key": "rgb_head",
+                "image_size": 4,
+                "condition_steps": 9,
+                "future_steps": 16,
+                "future_offset_steps": 1,
+                "condition_latent_shape": [2, 2, 2],
+                "future_latent_shape": [2, 4, 2, 2],
+                "episodes": [{
+                    "source_file_name": source_path.name,
+                    "source_content_hash": source_hash,
+                    "cache_file_name": cache_path.name,
+                    "first_anchor_t": 8,
+                    "last_anchor_t": 13,
+                    "num_windows": 6,
+                }],
+            }
+            (cache_dir / "video_latent_manifest.json").write_text(
+                json.dumps(cache_manifest), encoding="utf-8"
+            )
+            dataset = A2DFlowDataset(
+                cfg=A2DConfig(
+                    data_dir=str(root),
+                    image_keys=("rgb_head",),
+                    image_size=4,
+                    action_horizon=16,
+                    video_aux_enabled=True,
+                    video_latent_cache_dir=str(cache_dir),
+                    dataset_manifest=dataset_manifest_path.name,
+                    aug_random_crop_pad=0,
+                ),
+                episodes=[{
+                    "path": str(source_path),
+                    "file_name": source_path.name,
+                    "length": length,
+                    "content_hash": source_hash,
+                }],
+                norm_stats={
+                    "state": {"min": [0.0] * 13, "span": [1.0] * 13},
+                    "action": {"min": [0.0] * 13, "span": [1.0] * 13},
+                },
+                train=False,
+            )
+
+            complete = dataset[0]
+            self.assertTrue(bool(complete["video_valid_mask"].item()))
+            self.assertEqual(tuple(complete["video_condition_latent"].shape), (2, 2, 2))
+            self.assertEqual(tuple(complete["video_future_latent"].shape), (2, 4, 2, 2))
+            self.assertTrue(torch.all(complete["video_condition_latent"] == 3))
+            tail = dataset[len(dataset) - 1]
+            self.assertFalse(bool(tail["video_valid_mask"].item()))
+            self.assertTrue(torch.all(tail["video_future_latent"] == 0))
+            dataset.close()
+
     def test_video_aux_uses_nine_history_frames_and_masks_incomplete_future(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "episode.hdf5"

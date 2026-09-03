@@ -79,6 +79,7 @@ def test_video_aux_policy_adds_weighted_loss_and_updates_shared_parameters() -> 
     assert float(loss.detach().item()) == pytest.approx(expected)
     assert metrics["video_aux_valid_fraction"] == pytest.approx(0.5)
     assert metrics["video_aux_loss"] > 0.0
+    assert metrics["video_aux_cached_targets"] == 0.0
     assert codec.last_batch == 1
 
     loss.backward()
@@ -95,6 +96,24 @@ def test_video_aux_policy_skips_codec_when_no_future_clip_is_complete() -> None:
     assert torch.isfinite(loss)
     assert metrics["video_aux_loss"] == 0.0
     assert metrics["video_aux_valid_fraction"] == 0.0
+    assert codec.calls == 0
+
+
+def test_video_aux_policy_uses_cached_latents_without_calling_codec() -> None:
+    codec = FakeVideoCodec()
+    policy = make_policy(codec)
+    batch = make_batch(torch.tensor([True, False]))
+    batch.pop("video_condition")
+    batch.pop("video_future")
+    batch["video_condition_latent"] = torch.zeros(2, 2, 2, 2)
+    batch["video_future_latent"] = torch.ones(2, 2, 2, 2, 2)
+
+    loss, metrics = policy.compute_loss(batch)
+
+    assert torch.isfinite(loss)
+    assert metrics["video_aux_valid_fraction"] == pytest.approx(0.5)
+    assert metrics["video_aux_loss"] > 0.0
+    assert metrics["video_aux_cached_targets"] == 1.0
     assert codec.calls == 0
 
 
