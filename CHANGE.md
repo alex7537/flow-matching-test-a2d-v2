@@ -2,6 +2,14 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-09-03｜个人仓库Joint Latent WAM scratch V1
+
+- 从`feat/v3-wan-video-aux-v1`建立本地Joint WAM分支，不加载旧CFM checkpoint。
+- future-video latent与16×13 action使用独立噪声、共享timestep和同一Transformer，分别计算video/action Flow Matching loss。
+- 新增Wan latent cache V2：保存3-step condition prefix、4-step future target和逐latent-step tail mask；无效video tokens不作为action的attention key。
+- Wan codec切换为公开`Wan-Video/Wan2.2`接口，移除新路径对公司`psi-policy` runtime的依赖。
+- 本地全仓测试`61 passed`，真实600条数据索引的CPU trainer单步集成通过；A800 smoke等待当前主线训练完成后执行。
+
 ## 2026-09-03｜混合任务 CFM → Wan 视频辅助后训练链路
 
 - 新增 dataset/VAE/时序合同绑定的离线 Wan latent cache，支持逐 episode 原子写入、断点复用和错源拒绝。
