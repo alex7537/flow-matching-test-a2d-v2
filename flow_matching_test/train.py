@@ -195,6 +195,8 @@ def _build_dataset(*, data_cfg: dict[str, Any], split: str, seed: int):
         video_future_steps=int(data_cfg.get("video_future_steps", 16)),
         video_future_offset_steps=int(data_cfg.get("video_future_offset_steps", 1)),
         video_latent_cache_dir=data_cfg.get("video_latent_cache_dir"),
+        joint_wam_enabled=bool(data_cfg.get("joint_wam_enabled", False)),
+        joint_video_latent_cache_dir=data_cfg.get("joint_video_latent_cache_dir"),
         include_tail_padded_windows=bool(
             data_cfg.get("include_tail_padded_windows", False)
         ),
@@ -509,6 +511,10 @@ def main() -> None:
     if data_cfg["lift_oversample_factor"] < 1:
         raise ValueError("data.lift_oversample_factor must be >= 1")
     data_cfg["max_open_hdf5_files"] = int(data_cfg.get("max_open_hdf5_files", 64))
+    if bool(data_cfg.get("video_aux_enabled", False)) and bool(
+        data_cfg.get("joint_wam_enabled", False)
+    ):
+        raise ValueError("video_aux_enabled and joint_wam_enabled are mutually exclusive")
     training_cfg["watchdog_timeout_sec"] = float(training_cfg.get("watchdog_timeout_sec", 300.0))
     training_cfg["watchdog_check_interval_sec"] = float(
         training_cfg.get("watchdog_check_interval_sec", 10.0)
@@ -660,6 +666,7 @@ def main() -> None:
         "lift_oversample_factor": train_dataset.cfg.lift_oversample_factor,
         "enhanced_proprio": train_dataset.cfg.enhanced_proprio,
         "video_aux_enabled": train_dataset.cfg.video_aux_enabled,
+        "joint_wam_enabled": train_dataset.cfg.joint_wam_enabled,
         "video_key": train_dataset.cfg.video_key,
         "video_condition_steps": train_dataset.cfg.video_condition_steps,
         "video_future_steps": train_dataset.cfg.video_future_steps,
@@ -670,6 +677,16 @@ def main() -> None:
                 .read_bytes()
             ).hexdigest()
             if train_dataset.cfg.video_latent_cache_dir
+            else None
+        ),
+        "joint_video_latent_cache_manifest_sha256": (
+            hashlib.sha256(
+                (
+                    Path(str(train_dataset.cfg.joint_video_latent_cache_dir))
+                    / "joint_video_latent_manifest.json"
+                ).read_bytes()
+            ).hexdigest()
+            if train_dataset.cfg.joint_video_latent_cache_dir
             else None
         ),
         "dataset_manifest_sha256": split_manifest.get("dataset_manifest_sha256"),
@@ -794,6 +811,11 @@ def main() -> None:
                     if model_cfg["enhanced_proprio"]
                     else []
                 ),
+                "latent_condition_keys": (
+                    ["video_condition_latent"]
+                    if train_dataset.cfg.joint_wam_enabled
+                    else []
+                ),
                 "action_keys": [
                     str(item["name"])
                     for item in action_components(train_dataset.cfg.action_semantics)
@@ -807,6 +829,7 @@ def main() -> None:
                 "action_offset_steps": train_dataset.cfg.action_offset_steps,
                 "uses_action_mask": train_dataset.cfg.include_tail_padded_windows,
                 "enhanced_proprio": train_dataset.cfg.enhanced_proprio,
+                "joint_wam_enabled": train_dataset.cfg.joint_wam_enabled,
                 "action_layout": action_components(train_dataset.cfg.action_semantics),
             },
             "adapter_metadata": {
@@ -819,6 +842,9 @@ def main() -> None:
                 "use_proprio": bool(model_cfg.get("use_proprio", True)),
                 "enhanced_proprio": bool(model_cfg["enhanced_proprio"]),
                 "num_inference_steps": int(model_cfg.get("num_inference_steps", 40)),
+                "requires_video_condition_latent": bool(
+                    train_dataset.cfg.joint_wam_enabled
+                ),
             },
         }
 
@@ -976,7 +1002,13 @@ def main() -> None:
                 "resume checkpoint lift_oversample_factor does not match "
                 "the current dataset"
             )
-        for key in ("stats_digest", "dataset_manifest_sha256", "split_manifest_sha256"):
+        for key in (
+            "stats_digest",
+            "dataset_manifest_sha256",
+            "split_manifest_sha256",
+            "joint_wam_enabled",
+            "joint_video_latent_cache_manifest_sha256",
+        ):
             if checkpoint_provenance.get(key) != data_provenance.get(key):
                 raise ValueError(f"resume checkpoint {key} does not match the current dataset")
         model.load_state_dict(checkpoint["model_state_dict"])

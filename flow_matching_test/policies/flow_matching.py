@@ -57,9 +57,21 @@ class FlowTransformerBlock(nn.Module):
             nn.Linear(hidden, d_model),
         )
 
-    def forward(self, action_tokens: torch.Tensor, cond_tokens: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        action_tokens: torch.Tensor,
+        cond_tokens: torch.Tensor,
+        self_key_padding_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         x = action_tokens
-        self_out, _ = self.self_attn(self.self_norm(x), self.self_norm(x), self.self_norm(x), need_weights=False)
+        normalized = self.self_norm(x)
+        self_out, _ = self.self_attn(
+            normalized,
+            normalized,
+            normalized,
+            key_padding_mask=self_key_padding_mask,
+            need_weights=False,
+        )
         x = x + self_out
         cross_in = self.cross_norm(x)
         cross_out, _ = self.cross_attn(cross_in, cond_tokens, cond_tokens, need_weights=False)
