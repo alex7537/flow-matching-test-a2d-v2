@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import site
 import sys
 from pathlib import Path
@@ -101,14 +103,23 @@ class FrozenWanVaeCodec:
         key = (str(runtime_repo), str(checkpoint), str(device), str(self._dtype()))
         runtime = self._runtime_cache.get(key)
         if runtime is None:
-            try:
-                from wan.modules.vae2_2 import Wan2_2_VAE
-            except ImportError as exc:
-                raise ImportError(
-                    "Could not import the public Wan2.2 runtime. Set wan_runtime_repo to "
-                    "a checkout of https://github.com/Wan-Video/Wan2.2 and install its "
-                    "runtime dependencies."
-                ) from exc
+            module_path = runtime_repo / "wan" / "modules" / "vae2_2.py"
+            if not module_path.is_file():
+                raise FileNotFoundError(f"public Wan2.2 VAE module not found: {module_path}")
+            module_name = "_a2d_wan_vae2_2_" + hashlib.sha256(
+                str(module_path).encode("utf-8")
+            ).hexdigest()[:12]
+            module = sys.modules.get(module_name)
+            if module is None:
+                spec = importlib.util.spec_from_file_location(module_name, module_path)
+                if spec is None or spec.loader is None:
+                    raise ImportError(f"could not load public Wan2.2 VAE module: {module_path}")
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+            Wan2_2_VAE = getattr(module, "Wan2_2_VAE", None)
+            if Wan2_2_VAE is None:
+                raise ImportError(f"Wan2_2_VAE is missing from {module_path}")
             runtime = Wan2_2_VAE(
                 vae_pth=str(checkpoint),
                 dtype=self._dtype(),
