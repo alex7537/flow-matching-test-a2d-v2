@@ -504,25 +504,37 @@ class Successor:
             planned_steps=360300,
             warmup_steps=18015,
         )
-        deadline = time.time() + 300
-        while time.time() < deadline:
-            self.check_stop()
-            if process.poll() is not None:
-                raise RuntimeError(f"formal trainer exited during startup: {process.returncode}")
-            if (run_dir / "failure.json").exists():
-                raise RuntimeError("formal trainer wrote failure.json during startup")
-            if run_dir.exists() and self.gpu_processes():
-                self.event(
-                    "formal_train",
-                    "running",
-                    pid=process.pid,
-                    run_name=run_name,
-                    run_dir=str(run_dir),
-                    log=str(log_path),
-                )
-                return
-            time.sleep(10)
-        raise RuntimeError("formal trainer did not become GPU-active within 300 seconds")
+        try:
+            deadline = time.time() + 300
+            while time.time() < deadline:
+                self.check_stop()
+                if process.poll() is not None:
+                    raise RuntimeError(
+                        f"formal trainer exited during startup: {process.returncode}"
+                    )
+                if (run_dir / "failure.json").exists():
+                    raise RuntimeError("formal trainer wrote failure.json during startup")
+                if run_dir.exists() and self.gpu_processes():
+                    self.event(
+                        "formal_train",
+                        "running",
+                        pid=process.pid,
+                        run_name=run_name,
+                        run_dir=str(run_dir),
+                        log=str(log_path),
+                    )
+                    return
+                time.sleep(10)
+            raise RuntimeError("formal trainer did not become GPU-active within 300 seconds")
+        except BaseException:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
+            raise
 
     def run(self) -> None:
         try:
