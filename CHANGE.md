@@ -9,6 +9,7 @@
 - 新增Wan latent cache V2：保存3-step condition prefix、4-step future target和逐latent-step tail mask；无效video tokens不作为action的attention key。
 - Wan codec切换为公开`Wan-Video/Wan2.2`接口，移除新路径对公司`psi-policy` runtime的依赖。
 - 本地全仓测试`61 passed`，真实600条数据索引的CPU trainer单步集成通过；A800 smoke等待当前主线训练完成后执行。
+- 新增绑定前序100-epoch CFM的单GPU状态机：前序summary/failure、唯一trainer、GPU空闲、源码SHA、公开Wan commit、独立venv、cache manifest和三级smoke任一门禁失败即停止且不重试。
 
 ## 2026-09-03｜混合任务 CFM → Wan 视频辅助后训练链路
 

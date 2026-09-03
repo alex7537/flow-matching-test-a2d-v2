@@ -102,6 +102,8 @@ policy/CFM权重，不是随机初始化视觉基础模型和视频codec。
 - `flow_matching_test/a2d_dataset.py`：cache V2、tail mask和训练batch；
 - `scripts/precompute_wan_joint_latents.py`：公开Wan2.2 VAE latent cache；
 - `configs/a2d_v3_multitask_joint_wam_scratch_smoke.yaml`：受限smoke配置；
+- `configs/a2d_v3_multitask_joint_wam_scratch_100ep.yaml`：正式100-epoch配置；
+- `scripts/queue_joint_wam_after_cfm.py`：前序任务完成后依次执行cache、三级smoke和正式训练的一次性状态机；
 - `tests/test_joint_wam_policy.py`：双loss、跨模态梯度、联合采样；
 - `tests/test_joint_wam_latent_cache.py`：cache、尾部和数据绑定。
 
