@@ -36,8 +36,8 @@ policy:
   video_codec_batch_size: 1
   wan_vae_dtype: bfloat16
   wan_vae_checkpoint_path: /share_data/zhangyurui/.cache/huggingface/local-models/Wan2.2-TI2V-5B-vae/Wan2.2_VAE.pth
-  wan_runtime_repo: /share_data/zhangyurui/psi-policy_wm_v2
-  wan_runtime_site_packages: /share_data/zhangyurui/psi-policy_wm_v2/.venv_psi_policy/lib/python3.11/site-packages
+  wan_runtime_repo: /share_data/zhangyurui/.cache/open-source/Wan2.2
+  wan_runtime_site_packages: ""
 
 model:
   encoder_type: timm

@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from flow_matching_test.policies.factory import resolve_policy_type
-from flow_matching_test.policies.video_aux import VideoAuxFlowMatchingPolicy
+from flow_matching_test.policies.video_aux import FrozenWanVaeCodec, VideoAuxFlowMatchingPolicy
 
 
 class FakeVideoCodec:
@@ -29,6 +29,16 @@ class FakeVideoCodec:
         condition_last = torch.zeros(batch, 2, 2, 2, device=condition.device)
         future_target = torch.ones(batch, 2, 2, 2, 2, device=condition.device)
         return condition_last, future_target
+
+
+class FakeOfficialWanVae:
+    def encode(self, videos):
+        assert isinstance(videos, list)
+        return [
+            torch.arange(2 * 7 * 2 * 2, device=video.device, dtype=torch.float32)
+            .reshape(2, 7, 2, 2)
+            for video in videos
+        ]
 
 
 def make_policy(codec: FakeVideoCodec) -> VideoAuxFlowMatchingPolicy:
@@ -127,3 +137,26 @@ def test_video_aux_inference_needs_only_action_observation() -> None:
     assert codec.calls == 0
     assert copy.deepcopy(policy).video_codec is codec
     assert resolve_policy_type({"type": "cfm_video_aux"}) == "flow_matching_video_aux"
+
+
+def test_public_wan_codec_adapts_official_list_interface(monkeypatch) -> None:
+    codec = FrozenWanVaeCodec(
+        vae_checkpoint_path="unused-by-test",
+        runtime_repo="unused-by-test",
+        condition_steps=9,
+        future_steps=16,
+        latent_channels=2,
+        encode_batch_size=2,
+        dtype="float32",
+    )
+    monkeypatch.setattr(codec, "_runtime", lambda device: FakeOfficialWanVae())
+    condition = torch.zeros(2, 9, 3, 4, 4)
+    future = torch.zeros(2, 16, 3, 4, 4)
+
+    prefix, future_latent = codec.encode_joint_condition_future(condition, future)
+    condition_last, aux_future = codec.encode_condition_future(condition, future)
+
+    assert prefix.shape == (2, 2, 3, 2, 2)
+    assert future_latent.shape == (2, 2, 4, 2, 2)
+    assert torch.equal(condition_last, prefix[:, :, -1])
+    assert torch.equal(aux_future, future_latent)

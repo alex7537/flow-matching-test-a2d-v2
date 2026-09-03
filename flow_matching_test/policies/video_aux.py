@@ -24,9 +24,9 @@ class VideoLatentCodec(Protocol):
 
 
 class FrozenWanVaeCodec:
-    """Lazy, checkpoint-external Wan VAE used only to build frozen targets."""
+    """Lazy adapter around the public Wan2.2 VAE, used only for frozen targets."""
 
-    _runtime_cache: dict[tuple[str, str, str], object] = {}
+    _runtime_cache: dict[tuple[str, str, str, str], object] = {}
 
     def __init__(
         self,
@@ -98,15 +98,16 @@ class FrozenWanVaeCodec:
         runtime_repo_str = str(runtime_repo)
         if runtime_repo_str not in sys.path:
             sys.path.insert(0, runtime_repo_str)
-        key = (str(checkpoint), str(device), str(self._dtype()))
+        key = (str(runtime_repo), str(checkpoint), str(device), str(self._dtype()))
         runtime = self._runtime_cache.get(key)
         if runtime is None:
             try:
-                from psi_policy.model.wan.runtime import Wan2_2_VAE
+                from wan.modules.vae2_2 import Wan2_2_VAE
             except ImportError as exc:
                 raise ImportError(
-                    "Could not import psi_policy Wan runtime. Add the WAM repository and "
-                    "its site-packages to PYTHONPATH before training."
+                    "Could not import the public Wan2.2 runtime. Set wan_runtime_repo to "
+                    "a checkout of https://github.com/Wan-Video/Wan2.2 and install its "
+                    "runtime dependencies."
                 ) from exc
             runtime = Wan2_2_VAE(
                 vae_pth=str(checkpoint),
@@ -117,7 +118,7 @@ class FrozenWanVaeCodec:
         return runtime
 
     @torch.no_grad()
-    def encode_condition_future(
+    def _encode_condition_future_full(
         self,
         condition: torch.Tensor,
         future: torch.Tensor,
@@ -135,11 +136,15 @@ class FrozenWanVaeCodec:
         full_video = torch.cat([condition, future], dim=1)
         video_bcthw = full_video.permute(0, 2, 1, 3, 4).contiguous()
         runtime = self._runtime(video_bcthw.device)
-        encoded = []
+        encoded: list[torch.Tensor] = []
         for start in range(0, video_bcthw.shape[0], self.encode_batch_size):
             chunk = video_bcthw[start : start + self.encode_batch_size]
-            encoded.append(runtime.encode(chunk.to(dtype=self._dtype())).float())
-        latents = torch.cat(encoded, dim=0)
+            chunk_videos = [sample.to(dtype=self._dtype()) for sample in chunk]
+            chunk_latents = runtime.encode(chunk_videos)
+            if not isinstance(chunk_latents, list) or len(chunk_latents) != len(chunk_videos):
+                raise ValueError("official Wan2.2 VAE returned an invalid latent batch")
+            encoded.extend(value.float() for value in chunk_latents)
+        latents = torch.stack(encoded, dim=0)
         expected_steps = self.condition_latent_steps + self.future_latent_steps
         if latents.ndim != 5 or latents.shape[1] != self.latent_channels:
             raise ValueError(f"unexpected Wan latent shape: {tuple(latents.shape)}")
@@ -147,9 +152,27 @@ class FrozenWanVaeCodec:
             raise ValueError(
                 f"expected {expected_steps} latent steps from video, got {latents.shape[2]}"
             )
-        condition_last = latents[:, :, self.condition_latent_steps - 1]
+        condition_prefix = latents[:, :, : self.condition_latent_steps]
         future_target = latents[:, :, self.condition_latent_steps :]
+        return condition_prefix.detach(), future_target.detach()
+
+    @torch.no_grad()
+    def encode_condition_future(
+        self,
+        condition: torch.Tensor,
+        future: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        condition_prefix, future_target = self._encode_condition_future_full(condition, future)
+        condition_last = condition_prefix[:, :, -1]
         return condition_last.detach(), future_target.detach()
+
+    @torch.no_grad()
+    def encode_joint_condition_future(
+        self,
+        condition: torch.Tensor,
+        future: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._encode_condition_future_full(condition, future)
 
 
 class FutureLatentAuxHead(nn.Module):
