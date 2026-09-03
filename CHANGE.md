@@ -2,6 +2,13 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-09-03｜Joint WAM V1/V2路线冻结
+
+- V1固定使用现有box300+bottle300 V3数据，先验证9帧历史、双Flow loss和Joint Transformer；当前状态机等待前序CFM结束。
+- V2定义为两个task原始连续RGB的统一重处理：保留frame index/timestamp，不按joint相等删除视觉帧，重新对齐V3 action、split与Wan cache。
+- V2只有在V1证明视频监督有效且找到bottle原始RGB后启动，避免处理协议不对称和无证据地重复搬运500GB数据。
+- 分支README重写为同事入口，集中说明数据、tensor、模型、loss、梯度、mask、预算、状态和验证边界。
+
 ## 2026-09-03｜个人仓库Joint Latent WAM scratch V1
 
 - 从`feat/v3-wan-video-aux-v1`建立本地Joint WAM分支，不加载旧CFM checkpoint。
