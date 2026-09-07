@@ -270,6 +270,58 @@ def test_bundle_can_override_legacy_checkpoint_selection(tmp_path: Path) -> None
     assert manifest["source_checkpoint_selection"] == "historical_val_loss"
 
 
+def test_joint_wam_bundle_declares_external_wan_runtime(tmp_path: Path) -> None:
+    ckpt = tmp_path / "best_ema_action_mse.ckpt"
+    bundle = tmp_path / "bundle"
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cache_manifest = cache / "joint_video_latent_manifest.json"
+    cache_manifest.write_text(
+        __import__("json").dumps(
+            {
+                "wan_vae_sha256": "a" * 64,
+                "wan_vae_checkpoint": "/models/Wan2.2_VAE.pth",
+                "wan_runtime": "public Wan-Video/Wan2.2",
+                "vae_dtype": "bfloat16",
+            }
+        )
+    )
+    _checkpoint(ckpt, include_ema=True)
+    payload = torch.load(ckpt, map_location="cpu", weights_only=False)
+    payload["policy_type"] = "joint_latent_wam"
+    payload["policy_spec"] = {"type": "joint_latent_wam"}
+    payload["config"]["policy"] = {
+        "type": "joint_latent_wam",
+        "action_loss_weight": 1.0,
+        "video_loss_weight": 0.1,
+        "video_latent_channels": 48,
+        "video_condition_latent_steps": 3,
+        "video_future_latent_steps": 4,
+        "video_latent_spatial_size": 14,
+        "video_patch_size": 2,
+    }
+    payload["config"]["data"].update(
+        {
+            "joint_video_latent_cache_dir": str(cache),
+            "video_key": "rgb_head",
+            "video_condition_steps": 9,
+        }
+    )
+    payload["data_provenance"]["joint_video_latent_cache_manifest_sha256"] = (
+        __import__("hashlib").sha256(cache_manifest.read_bytes()).hexdigest()
+    )
+    torch.save(payload, ckpt)
+
+    export_eval_bundle(ckpt, bundle, weights_variant="ema")
+
+    config = yaml.safe_load((bundle / "config.yaml").read_text())
+    manifest = yaml.safe_load((bundle / "manifest.json").read_text())
+    assert config["schema_version"] == 3
+    assert config["video_condition"]["frames"] == 9
+    assert manifest["policy_type"] == "joint_latent_wam"
+    assert manifest["external_artifacts"]["wan_vae"]["sha256"] == "a" * 64
+
+
 @pytest.mark.parametrize(
     "policy_cfg",
     [

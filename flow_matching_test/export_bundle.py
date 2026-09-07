@@ -96,6 +96,7 @@ def _inference_config(
         "flow_matching_video_aux",
         "imle",
         "diffusion",
+        "joint_latent_wam",
     }:
         raise ValueError(f"unsupported rollout policy_type={policy_type!r}")
     policy_cfg["type"] = policy_type
@@ -112,8 +113,8 @@ def _inference_config(
         width, height = camera_resolutions.get(key, (image_size, image_size))
         cameras.append({"name": key, "model_key": key, "resolution": [width, height]})
 
-    return {
-        "schema_version": 2,
+    config = {
+        "schema_version": 3 if policy_type == "joint_latent_wam" else 2,
         "policy": policy_cfg,
         "model": {
             "encoder_type": str(model_cfg.get("encoder_type", "cnn")),
@@ -159,6 +160,45 @@ def _inference_config(
         "joint_order": joint_order,
         "sampling": {"seed": int(train_cfg.get("training", {}).get("seed", 42))},
     }
+    if policy_type == "joint_latent_wam":
+        cache_dir = Path(str(data_cfg.get("joint_video_latent_cache_dir", ""))).expanduser()
+        cache_manifest_path = cache_dir / "joint_video_latent_manifest.json"
+        if not cache_manifest_path.is_file():
+            raise FileNotFoundError(
+                f"Joint WAM cache manifest not found: {cache_manifest_path}"
+            )
+        cache_manifest_bytes = cache_manifest_path.read_bytes()
+        expected_manifest_sha = str(
+            checkpoint.get("data_provenance", {}).get(
+                "joint_video_latent_cache_manifest_sha256", ""
+            )
+        )
+        actual_manifest_sha = hashlib.sha256(cache_manifest_bytes).hexdigest()
+        if expected_manifest_sha and actual_manifest_sha != expected_manifest_sha:
+            raise ValueError(
+                "Joint WAM cache manifest SHA256 differs from checkpoint provenance"
+            )
+        cache_manifest = json.loads(cache_manifest_bytes)
+        vae_sha = str(cache_manifest.get("wan_vae_sha256", ""))
+        if len(vae_sha) != 64:
+            raise ValueError("Joint WAM cache manifest has no valid Wan VAE SHA256")
+        config["video_condition"] = {
+            "key": str(data_cfg.get("video_key", "rgb_head")),
+            "frames": int(data_cfg.get("video_condition_steps", 9)),
+            "preprocessing": "RGB resize INTER_AREA, uint8/127.5-1, no augmentation",
+            "vae_dtype": str(cache_manifest.get("vae_dtype", "bfloat16")),
+            "external_runtime_required": True,
+        }
+        config["external_artifacts"] = {
+            "wan_vae": {
+                "sha256": vae_sha,
+                "file_name": Path(str(cache_manifest.get("wan_vae_checkpoint", "wan_vae"))).name,
+            },
+            "wan_runtime": {
+                "implementation": str(cache_manifest.get("wan_runtime", "public Wan2.2")),
+            },
+        }
+    return config
 
 
 def export_eval_bundle(
@@ -234,7 +274,7 @@ def export_eval_bundle(
         "eval_bundle", {}
     ).get("rollout_environment", {})
     manifest = {
-        "schema_version": 2,
+        "schema_version": int(config["schema_version"]),
         "policy_type": config["policy"]["type"],
         "git_sha": _git_sha(Path(__file__).resolve().parents[1]),
         "data_version": data_version,
@@ -250,15 +290,22 @@ def export_eval_bundle(
         "training_environment": checkpoint["training_environment"],
         "rollout_environment_spec": rollout_environment_spec,
     }
+    if config.get("external_artifacts"):
+        manifest["external_artifacts"] = copy.deepcopy(config["external_artifacts"])
     (out_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    (out_dir / "README.md").write_text(
+    readme = (
         f"{manifest['policy_type']} rollout bundle using {weights_variant} weights from "
         f"`{ckpt_path.name}` ({manifest['source_checkpoint_selection']}) at step "
-        f"{manifest['train_step']}.\n",
-        encoding="utf-8",
+        f"{manifest['train_step']}.\n"
     )
+    if manifest["policy_type"] == "joint_latent_wam":
+        readme += (
+            "This bundle requires the external Wan2.2 runtime and the exact Wan VAE "
+            "checkpoint SHA256 declared in manifest.json.\n"
+        )
+    (out_dir / "README.md").write_text(readme, encoding="utf-8")
 
     bundle_files = ["ckpt.pt", "norm_stats.json", "config.yaml", "README.md"]
     if (out_dir / "data_split.json").exists():
