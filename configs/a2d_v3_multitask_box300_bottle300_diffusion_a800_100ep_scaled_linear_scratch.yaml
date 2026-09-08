@@ -1,0 +1,100 @@
+data:
+  data_dir: /share_data/zhangyurui/flow-matching-test-a2d-v2/code/datasets/a2d_v3_multitask_box300_bottle300_seed42
+  action_semantics: arm_executed_hand_commanded_joint_position
+  image_keys: [rgb_head, rgb_right_hand]
+  image_size: 224
+  val_ratio: 0.1
+  history_steps: 1
+  action_horizon: 16
+  action_offset_steps: 1
+  include_tail_padded_windows: true
+  transition_oversample_factor: 2
+  lift_oversample_factor: 2
+  transition_threshold: 0.1
+  motion_threshold: 0.0001
+  norm_stats: norm_stats.json
+  dataset_manifest: dataset_manifest.json
+  split_manifest: split_manifest.json
+  range_eps: 0.0001
+  aug_brightness: 0.2
+  aug_contrast: 0.4
+  aug_saturation: 0.2
+  aug_hue: 0.05
+  max_open_hdf5_files: 64
+  enhanced_proprio: false
+
+policy:
+  type: diffusion
+  diffusion_train_steps: 100
+  diffusion_inference_steps: 15
+  diffusion_beta_schedule: scaled_linear
+  diffusion_beta_start: 0.0001
+  diffusion_beta_end: 0.02
+
+model:
+  encoder_type: timm
+  use_proprio: true
+  enhanced_proprio: false
+  timm_model_name: vit_small_r26_s32_224
+  timm_pretrained: true
+  timm_token_mode: spatial
+  timm_tokens_per_frame: 49
+  d_model: 384
+  n_head: 4
+  n_layer: 4
+  dropout: 0.0
+  time_eps: 0.001
+  num_inference_steps: 5
+  freeze_encoder_backbone: false
+
+training:
+  seed: 42
+  device: cuda
+  batch_size: 32
+  num_workers: 4
+  pin_memory: true
+  lr: 0.0001
+  backbone_lr_multiplier: 0.1
+  weight_decay: 0.0001
+  betas: [0.9, 0.95]
+  grad_clip: 1.0
+  warmup_steps: 18970
+  num_epochs: 100
+  periodic_checkpoint_every_n_epochs: 5
+  max_train_steps: null
+  max_val_steps: null
+  init_from: null
+  resume_from: null
+  ema_enabled: true
+  ema_decay: 0.999
+  watchdog_timeout_sec: 300
+  watchdog_check_interval_sec: 10
+  run_name: dp_multitask_box300_bottle300_v3_vit_finetune_01x_100ep_scaled_linear_scratch_seed42_{timestamp}
+  output_dir: /share_data/zhangyurui/flow-matching-test-a2d-v2/runs/{run_name}
+
+validation:
+  deterministic: true
+  seed: 42
+  sample_draws: 3
+
+logging:
+  wandb:
+    enabled: true
+    mode: online
+    project: a2d-flow-matching
+    entity: z1135783608-psibot
+    group: dp-multitask-box300-bottle300-v3-100ep-scaled-linear-scratch
+    job_type: train
+    tags: [a800, diffusion-policy, scaled-linear-beta, ddim-15, multitask, box, bottle, balanced-episodes, rgb-proprio, v3-hybrid-hand-target, exact-dedup, tail-padded, masked-loss, lift-oversample-2x, vit-finetune-01x, scratch, 100ep, 379400-steps, deterministic-val, ema, watchdog, seed42]
+
+visualization:
+  rerun:
+    enabled: false
+
+deployment:
+  eval_bundle:
+    enabled: true
+    execute_horizon: 16
+    archive: true
+    weights_variant: raw
+    data_version: a2d_v3_multitask_box300_bottle300_dp_scaled_linear_100ep_scratch
