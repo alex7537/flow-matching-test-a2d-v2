@@ -25,15 +25,25 @@ output:
 共享视觉/动作主干：
 
 ```text
-两路共享 vit_small_r26_s32_224
-每路49个 spatial tokens
-+ 一个可选 proprio token
+每路 RGB [B,1,3,224,224]
+        ↓ 共享 Hybrid ViT: vit_small_r26_s32_224
+ResNetV2-26 → [B,2048,7,7]
+        ↓ 1×1 Conv2d: 2048→384
+49个 patch embeddings + 1个可学习 CLS
+        ↓ ViT Transformer
+默认保留每路49个上下文化 spatial tokens
+
+两路 spatial: 49 + 49
++ 一个可选 proprio token: 1
+= 99个 observation-condition tokens
         ↓
 4层 Action Transformer
 d_model=384, n_head=4
         ↓
 连续 action chunk [16,13]
 ```
+
+`7×7` 是图像二维特征网格，不是分割结果或机器人 XYZ 空间；49表示空间位置数，384才是每个位置的特征维度。ViT 内部同时存在 CLS，但默认 `spatial` 路线在完整 ViT 处理后丢弃 CLS。CLS 消融改为每路只传1个全局 token，因此 condition 从99降为3；ViT 内部仍会计算所有 patch。完整形状、代码入口和替代 encoder 边界见 [`docs/VISION_ENCODER.md`](docs/VISION_ENCODER.md)。
 
 数据侧共同使用 exact-dedup keep-last、tail padding + `action_mask`、train-only transition/lift oversampling、episode-level split、deterministic validation、EMA、watchdog 和原子 checkpoint。
 
@@ -197,4 +207,5 @@ failure.json（仅失败时）
 - [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：JPEG 预处理、V3 action、dedup、padding、mask 与 sampling；
 - [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR；
 - [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练技巧、监控与停止判断；
+- [`docs/VISION_ENCODER.md`](docs/VISION_ENCODER.md)：Hybrid ViT、ResNet特征图、spatial/CLS token与替代视觉encoder合同；
 - [`artifacts_index.md`](artifacts_index.md)：外部 checkpoint、bundle 与实验产物索引。
