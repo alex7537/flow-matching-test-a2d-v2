@@ -1,0 +1,171 @@
+{
+  "schema_version": 2,
+  "project": "flow-matching-test-a2d-v2",
+  "objective": "Produce a traceable offset-1 A2D policy iteration and evaluate it through frozen offline and calibrated closed-loop gates",
+  "created_at": "2026-08-14T09:34:40.798791Z",
+  "updated_at": "2026-08-14T09:34:40.933188Z",
+  "control": {
+    "autonomy_level": "L1",
+    "cadence": "manual",
+    "paused": false,
+    "pause_reason": null,
+    "max_cycles": 10,
+    "max_attempts_per_phase": 3,
+    "max_consecutive_failures": 3,
+    "stagnation_threshold": 3,
+    "token_budget": null,
+    "cost_budget": null
+  },
+  "active_cycle": 1,
+  "cycles": [
+    {
+      "number": 1,
+      "created_at": "2026-08-14T09:34:40.798999Z",
+      "reason": "initial cycle",
+      "phases": {
+        "frame": {
+          "status": "passed",
+          "skill": "adaptive-task-coach",
+          "evidence": "Objective, acceptance criteria, evaluation funnel, constraints, and terminal evidence are defined",
+          "artifacts": {
+            "protocol": "docs/LOOP_FIRST_INSTANCE.md",
+            "task_state": ".codex/task-coach/model-iteration-evaluation.json",
+            "constraints": ".codex/robot-ml-constraints.md"
+          },
+          "updated_at": "2026-08-14T09:34:40.848054Z"
+        },
+        "source": {
+          "status": "passed",
+          "skill": "understand-codebase",
+          "evidence": "Clean origin/main source baseline inspected locally",
+          "artifacts": {
+            "repository": "https://github.com/alex7537/flow-matching-test-a2d-v2",
+            "branch": "main",
+            "git_sha": "fd2b7512affaff00ef03165953978c8e85ab20b2"
+          },
+          "updated_at": "2026-08-14T09:34:40.891255Z"
+        },
+        "understand": {
+          "status": "passed",
+          "skill": "understand-codebase",
+          "evidence": "Trainer, policy interface, temporal contract, bundle path, offline diagnostics, Isaac rollout path, and current blockers mapped in the first-instance protocol",
+          "artifacts": {
+            "protocol": "docs/LOOP_FIRST_INSTANCE.md",
+            "rollout_grid": "rollout/eval_grid.yaml",
+            "comparison_contract": "docs/POLICY_COMPARISON_PROTOCOL.md"
+          },
+          "updated_at": "2026-08-14T09:34:40.933188Z"
+        },
+        "labels": {
+          "status": "pending",
+          "skill": null,
+          "evidence": null,
+          "artifacts": {},
+          "updated_at": null
+        },
+        "split": {
+          "status": "pending",
+          "skill": null,
+          "evidence": null,
+          "artifacts": {},
+          "updated_at": null
+        },
+        "train_plan": {
+          "status": "pending",
+          "skill": null,
+          "evidence": null,
+          "artifacts": {},
+          "updated_at": null
+        },
+        "infrastructure": {
+          "status": "pending",
+          "skill": null,
+          "evidence": null,
+          "artifacts": {},
+          "updated_at": null
+        },
+        "train": {
+          "status": "pending",
+          "skill": null,
+          "evidence": null,
+          "artifacts": {},
+          "updated_at": null
+        },
+        "evaluate": {
+          "status": "pending",
+          "skill": null,
+          "evidence": null,
+          "artifacts": {},
+          "updated_at": null
+        },
+        "package": {
+          "status": "pending",
+          "skill": null,
+          "evidence": null,
+          "artifacts": {},
+          "updated_at": null
+        },
+        "release": {
+          "status": "pending",
+          "skill": null,
+          "evidence": null,
+          "artifacts": {},
+          "updated_at": null
+        },
+        "capture": {
+          "status": "pending",
+          "skill": null,
+          "evidence": null,
+          "artifacts": {},
+          "updated_at": null
+        }
+      },
+      "attempts": [],
+      "events": [
+        {
+          "at": "2026-08-14T09:34:40.848054Z",
+          "kind": "phase-transition",
+          "phase": "frame",
+          "from_status": "pending",
+          "to_status": "passed",
+          "skill": "adaptive-task-coach",
+          "evidence": "Objective, acceptance criteria, evaluation funnel, constraints, and terminal evidence are defined",
+          "artifacts": {
+            "protocol": "docs/LOOP_FIRST_INSTANCE.md",
+            "task_state": ".codex/task-coach/model-iteration-evaluation.json",
+            "constraints": ".codex/robot-ml-constraints.md"
+          }
+        },
+        {
+          "at": "2026-08-14T09:34:40.891255Z",
+          "kind": "phase-transition",
+          "phase": "source",
+          "from_status": "pending",
+          "to_status": "passed",
+          "skill": "understand-codebase",
+          "evidence": "Clean origin/main source baseline inspected locally",
+          "artifacts": {
+            "repository": "https://github.com/alex7537/flow-matching-test-a2d-v2",
+            "branch": "main",
+            "git_sha": "fd2b7512affaff00ef03165953978c8e85ab20b2"
+          }
+        },
+        {
+          "at": "2026-08-14T09:34:40.933188Z",
+          "kind": "phase-transition",
+          "phase": "understand",
+          "from_status": "pending",
+          "to_status": "passed",
+          "skill": "understand-codebase",
+          "evidence": "Trainer, policy interface, temporal contract, bundle path, offline diagnostics, Isaac rollout path, and current blockers mapped in the first-instance protocol",
+          "artifacts": {
+            "protocol": "docs/LOOP_FIRST_INSTANCE.md",
+            "rollout_grid": "rollout/eval_grid.yaml",
+            "comparison_contract": "docs/POLICY_COMPARISON_PROTOCOL.md"
+          }
+        }
+      ]
+    }
+  ],
+  "decisions": []
+}
