@@ -1,0 +1,316 @@
+diff --git a/models/rdt_runner.py b/models/rdt_runner.py
+index 3c452e4..903c628 100644
+--- a/models/rdt_runner.py
++++ b/models/rdt_runner.py
+@@ -162,9 +162,9 @@ class RDTRunner(
+         return noisy_action
+     
+     # ========= Train  ============
+-    def compute_loss(self, lang_tokens, lang_attn_mask, img_tokens, 
+-                     state_tokens, action_gt, action_mask, ctrl_freqs
+-                    ) -> torch.Tensor:
++    def compute_loss(self, lang_tokens, lang_attn_mask, img_tokens,
++                     state_tokens, action_gt, action_mask, ctrl_freqs,
++                     action_time_mask=None) -> torch.Tensor:
+         '''
+         lang_tokens: (batch_size, lang_len, lang_token_dim)
+         lang_attn_mask: (batch_size, lang_len), a mask for valid language tokens,
+@@ -194,6 +194,9 @@ class RDTRunner(
+         noisy_action = self.noise_scheduler.add_noise(
+             action_gt, noise, timesteps)
+         
++        # Preserve the action-dimension mask for the loss before expanding it
++        # over the state token for use as an input condition.
++        loss_dim_mask = action_mask.expand(-1, action_gt.shape[1], -1)
+         # Concatenate the state and action tokens to form the input sequence
+         state_action_traj = torch.cat([state_tokens, noisy_action], dim=1)
+         # Append the action mask to the input sequence
+@@ -215,7 +218,12 @@ class RDTRunner(
+         else:
+             raise ValueError(f"Unsupported prediction type {pred_type}")
+ 
+-        loss = F.mse_loss(pred, target)
++        squared_error = F.mse_loss(pred, target, reduction='none')
++        loss_mask = loss_dim_mask
++        if action_time_mask is not None:
++            loss_mask = loss_mask * action_time_mask.to(
++                device=pred.device, dtype=pred.dtype).unsqueeze(-1)
++        loss = (squared_error * loss_mask).sum() / loss_mask.sum().clamp_min(1.0)
+         return loss
+     
+     # ========= Inference  ============
+diff --git a/train/dataset.py b/train/dataset.py
+index e72b993..ba8ef94 100644
+--- a/train/dataset.py
++++ b/train/dataset.py
+@@ -15,7 +15,6 @@ import transformers
+ 
+ from data.filelock import FileLock
+ from data.hdf5_vla_dataset import HDF5VLADataset
+-from train.image_corrupt import image_corrupt
+ 
+ 
+ def get_clean_item(chunk_dir):
+@@ -94,7 +93,8 @@ class VLAConsumerDataset(Dataset):
+         cam_ext_mask_prob=-1.0,
+         state_noise_snr=None,
+         use_hdf5=False,
+-        use_precomp_lang_embed=False
++        use_precomp_lang_embed=False,
++        hdf5_split='train'
+     ):
+         super(VLAConsumerDataset, self).__init__()
+         
+@@ -125,7 +125,7 @@ class VLAConsumerDataset(Dataset):
+         self.use_hdf5 = use_hdf5
+         self.hdf5_dataset = None
+         if use_hdf5:
+-            self.hdf5_dataset = HDF5VLADataset()
++            self.hdf5_dataset = HDF5VLADataset(split=hdf5_split)
+         self.use_precomp_lang_embed = use_precomp_lang_embed
+         if use_precomp_lang_embed:
+             self.empty_lang_embed = torch.load("data/empty_lang_embed.pt")
+@@ -243,10 +243,12 @@ class VLAConsumerDataset(Dataset):
+             data_dict = None
+             try:
+                 if self.use_hdf5:
+-                    res = self.hdf5_dataset.get_item()
++                    sample_index = index if self.hdf5_dataset.split == 'val' else None
++                    res = self.hdf5_dataset.get_item(sample_index)
+                     content = res['meta']
+                     states = res['state']
+                     actions = res['actions']
++                    action_time_mask = res['action_time_mask']
+                     state_elem_mask = res['state_indicator']
+                     image_metas = [
+                         res['cam_high'], res['cam_high_mask'],
+@@ -260,6 +262,7 @@ class VLAConsumerDataset(Dataset):
+                     (content, _, states, _, actions, _, 
+                     state_elem_mask, *image_metas, 
+                     state_std, state_mean, state_norm) = self._safe_load(index)
++                    action_time_mask = np.ones(actions.shape[0], dtype=np.float32)
+                 
+                 data_dict = {}
+                 data_dict['dataset_name'] = content['dataset_name']
+@@ -277,6 +280,7 @@ class VLAConsumerDataset(Dataset):
+                 data_dict["states"] = states \
+                     if random.random() > self.cond_mask_prob else ds_state_mean
+                 data_dict["actions"] = actions
++                data_dict["action_time_mask"] = action_time_mask
+                 data_dict["state_elem_mask"] = state_elem_mask \
+                     if random.random() > self.cond_mask_prob else np.zeros_like(state_elem_mask)
+                 
+@@ -330,6 +334,7 @@ class VLAConsumerDataset(Dataset):
+                             image = transforms.ColorJitter(
+                                 brightness=0.3, contrast=0.4, saturation=0.5, hue=0.03)(image)
+                         if aug_type != "color_only":
++                            from train.image_corrupt import image_corrupt
+                             image = image_corrupt(image)
+                     
+                     if self.image_aspect_ratio == 'pad':
+@@ -398,6 +403,7 @@ class DataCollatorForVLAConsumerDataset(object):
+         batch = {
+             "states": [],
+             "actions": [],
++            "action_time_mask": [],
+             "state_elem_mask": [],
+             "state_norm": [],
+             "images": [],
+@@ -411,7 +417,7 @@ class DataCollatorForVLAConsumerDataset(object):
+         for instance in instances:
+             # Convert all the numpy arrays to tensor
+             keys_to_check = [
+-                'states', 'actions',
++                'states', 'actions', 'action_time_mask',
+                 'state_elem_mask', 'state_norm',
+             ]
+             for key in keys_to_check:
+@@ -432,7 +438,7 @@ class DataCollatorForVLAConsumerDataset(object):
+             batch["ctrl_freqs"].append(instance["ctrl_freq"])
+         
+         keys_to_stack = [
+-            'states', 'actions',
++            'states', 'actions', 'action_time_mask',
+             'state_elem_mask', 'state_norm',
+             "images"
+         ]
+diff --git a/train/sample.py b/train/sample.py
+index 3f070a9..40e9bf7 100644
+--- a/train/sample.py
++++ b/train/sample.py
+@@ -14,6 +14,9 @@ def log_sample_res(
+     )
+ 
+     rdt.eval()
++    cpu_rng_state = torch.get_rng_state()
++    cuda_rng_state = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
++    torch.manual_seed(args.seed + 1_000_000)
+     
+     loss_for_log = defaultdict(float)
+     loss_counter = defaultdict(int)
+@@ -29,6 +32,7 @@ def log_sample_res(
+         # We only use the last state as input
+         states = states[:, -1:, :]
+         actions = batch["actions"].to(dtype=weight_dtype)
++        action_time_mask = batch["action_time_mask"].to(dtype=weight_dtype)
+         state_elem_mask = batch["state_elem_mask"].to(dtype=weight_dtype)
+             
+         batch_size, _, C, H, W = images.shape
+@@ -43,17 +47,21 @@ def log_sample_res(
+                 attention_mask=lang_attn_mask
+             )["last_hidden_state"].detach()
+             
+-        pred_actions = rdt.predict_action(
+-            lang_tokens=text_embeds,
+-            lang_attn_mask=lang_attn_mask,
+-            img_tokens=image_embeds,
+-            state_tokens=states,
+-            action_mask=state_elem_mask.unsqueeze(1),
+-            ctrl_freqs=ctrl_freqs
+-        )
++        with accelerator.autocast():
++            pred_actions = rdt.predict_action(
++                lang_tokens=text_embeds,
++                lang_attn_mask=lang_attn_mask,
++                img_tokens=image_embeds,
++                state_tokens=states,
++                action_mask=state_elem_mask.unsqueeze(1),
++                ctrl_freqs=ctrl_freqs
++            )
+         
+         num_steps = pred_actions.shape[1]
+         expanded_state_elem_mask = state_elem_mask.unsqueeze(1).tile((1, num_steps, 1)).float()
++        expanded_state_elem_mask = (
++            expanded_state_elem_mask * action_time_mask.unsqueeze(-1).float()
++        )
+         expanded_state_norm = state_norm.unsqueeze(1).tile((1, num_steps, 1)).float()
+         
+         loss = F.mse_loss(pred_actions, actions, reduction='none').float()
+@@ -93,6 +101,9 @@ def log_sample_res(
+             loss_for_log[name] = round(loss_for_log[name] / loss_counter[name], 4)
+     
+     rdt.train()
++    torch.set_rng_state(cpu_rng_state)
++    if cuda_rng_state is not None:
++        torch.cuda.set_rng_state(cuda_rng_state)
+     torch.cuda.empty_cache()
+ 
+-    return dict(loss_for_log)
+\ No newline at end of file
++    return dict(loss_for_log)
+diff --git a/train/train.py b/train/train.py
+index d1386c1..919ed37 100644
+--- a/train/train.py
++++ b/train/train.py
+@@ -14,6 +14,7 @@
+ # See the License for the specific language governing permissions and
+ 
+ import copy
++import json
+ import logging
+ import math
+ import os
+@@ -250,6 +251,7 @@ def train(args, logger):
+         state_noise_snr=args.state_noise_snr,
+         use_hdf5=args.load_from_hdf5,
+         use_precomp_lang_embed=args.precomp_lang_embed,
++        hdf5_split='train',
+     )
+     sample_dataset = VLAConsumerDataset(
+         config=config["dataset"],
+@@ -264,6 +266,7 @@ def train(args, logger):
+         state_noise_snr=None,
+         use_hdf5=args.load_from_hdf5,
+         use_precomp_lang_embed=args.precomp_lang_embed,
++        hdf5_split='val',
+     )                              
+     
+     data_collator = DataCollatorForVLAConsumerDataset(tokenizer)                                                        
+@@ -275,16 +278,16 @@ def train(args, logger):
+         collate_fn=data_collator,
+         num_workers=args.dataloader_num_workers,
+         pin_memory=True,
+-        persistent_workers=True
++        persistent_workers=args.dataloader_num_workers > 0
+     )
+     sample_dataloader = torch.utils.data.DataLoader(
+         sample_dataset,
+         batch_size=args.sample_batch_size,
+-        shuffle=True,
++        shuffle=False,
+         collate_fn=data_collator,
+         num_workers=args.dataloader_num_workers,
+         pin_memory=True,
+-        persistent_workers=True
++        persistent_workers=args.dataloader_num_workers > 0
+     )
+     
+     # Scheduler and math around the number of training steps.
+@@ -326,7 +329,10 @@ def train(args, logger):
+     # We need to initialize the trackers we use, and also store our configuration.
+     # The trackers initializes automatically on the main process.
+     if accelerator.is_main_process:
+-        accelerator.init_trackers("roboticDiffusionTransformer", config=vars(args))
++        accelerator.init_trackers(
++            os.environ.get("WANDB_PROJECT", "roboticDiffusionTransformer"),
++            config=vars(args),
++        )
+ 
+     # Train!
+     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+@@ -341,6 +347,11 @@ def train(args, logger):
+     logger.info(f"  Total optimization steps = {args.max_train_steps}")
+     global_step = 0
+     first_epoch = 0
++    best_metric_path = os.path.join(args.output_dir, "best_sample_metrics.json")
++    best_sample_mse = float("inf")
++    if os.path.isfile(best_metric_path):
++        with open(best_metric_path, "r") as file:
++            best_sample_mse = float(json.load(file)["overall_avg_sample_mse"])
+     
+     # Load from a pretrained checkpoint
+     if (
+@@ -407,6 +418,7 @@ def train(args, logger):
+                 # We only use the last state as input
+                 states = states[:, -1:, :]
+                 actions = batch["actions"].to(dtype=weight_dtype)
++                action_time_mask = batch["action_time_mask"].to(dtype=weight_dtype)
+                 state_elem_mask = batch["state_elem_mask"].to(dtype=weight_dtype)
+                 ctrl_freqs = batch["ctrl_freqs"]
+                     
+@@ -431,7 +443,8 @@ def train(args, logger):
+                     state_tokens=states,
+                     action_gt=actions,
+                     action_mask=state_elem_mask,
+-                    ctrl_freqs=ctrl_freqs
++                    ctrl_freqs=ctrl_freqs,
++                    action_time_mask=action_time_mask,
+                 )
+ 
+                 accelerator.backward(loss)
+@@ -470,6 +483,25 @@ def train(args, logger):
+                     )
+                     logger.info(sample_loss_for_log)
+                     accelerator.log(sample_loss_for_log, step=global_step)
++                    current_sample_mse = float(
++                        sample_loss_for_log["overall_avg_sample_mse"]
++                    )
++                    if accelerator.is_main_process and current_sample_mse < best_sample_mse:
++                        best_sample_mse = current_sample_mse
++                        accelerator.unwrap_model(rdt).save_pretrained(
++                            os.path.join(args.output_dir, "best_raw")
++                        )
++                        ema_rdt.save_pretrained(
++                            os.path.join(args.output_dir, "best_ema_at_raw_best")
++                        )
++                        with open(best_metric_path, "w") as file:
++                            json.dump({
++                                "selection": "raw_overall_avg_sample_mse",
++                                "global_step": global_step,
++                                "overall_avg_sample_mse": best_sample_mse,
++                                "metrics": sample_loss_for_log,
++                            }, file, indent=2)
++                            file.write("\n")
+ 
+             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+             progress_bar.set_postfix(**logs)

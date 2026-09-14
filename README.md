@@ -4,6 +4,48 @@
 
 `main` 是数据契约、共享模型组件、训练入口和路线总览；专项分支只维护各自实验，不要求 README 完全相同。
 
+## 本分支：RDT-170M 迁移路线
+
+`feat/a2d-rdt170m-adapter` 将 A2D V3 多任务数据接入官方
+[`thu-ml/RoboticsDiffusionTransformer`](https://github.com/thu-ml/RoboticsDiffusionTransformer)。它不是在现有 CFM Transformer 上加一层，而是将 A2D 的观测和动作映射到 RDT 的统一机器人表示后，对预训练 RDT-170M 做微调。
+
+```text
+过去2帧 × 3路相机
+├─ head RGB
+├─ right-hand RGB
+└─ 缺失left-wrist：背景图 + invalid mask
+        ↓ frozen SigLIP SO400M
+        6张图 × 729 patches
+        ↓ image adaptor
+        image condition [B,4374,1024]
+
+当前 proprio [B,13] ─→ 128维统一状态 ─→ state adaptor ─┐
+empty language [B,1,4096] ───────────→ lang adaptor ───┤
+30 Hz control frequency + diffusion timestep ──────────┤
+                                                        ↓
+噪声动作 [B,64,128] ─→ action adaptor ─→ 14层 RDT Transformer
+                                          hidden=1024, heads=32
+                                                        ↓
+                                     预测干净动作 [B,64,128]
+                                                        ↓
+                                              5步 DPM-Solver
+                                                        ↓
+                                      取13个A2D有效维度 [B,64,13]
+```
+
+训练目标为带维度和时间 mask 的干净动作回归：
+
+```text
+x_k = sqrt(alpha_bar_k) * action + sqrt(1-alpha_bar_k) * noise
+L_rdt = masked_MSE(predicted_clean_action, action)
+```
+
+与原生 CFM 的核心区别：RDT 使用冻结 SigLIP、2帧历史、64步统一动作空间、14层预训练 Transformer 和离散 diffusion；CFM 使用共享 Hybrid ViT、当前帧、16×13 原生动作空间、4层小型 Transformer 和连续 Flow Matching。完整数据映射、训练预算、固定上游 revision 与 smoke 证据见 [`integrations/rdt/README.md`](integrations/rdt/README.md)。
+
+对应的 Isaac 在线推理 adapter 位于个人仓库
+[`fk-issac-logistics`](https://github.com/alex7537/fk-issac-logistics) 的
+`feat/rdt170m-online-rollout-v1` 分支。RDT bundle 仍需外置、SHA 固定的 SigLIP 权重；训练代码与推理资产不混入 Git。
+
 ## 共同契约
 
 ```text
@@ -47,7 +89,7 @@ d_model=384, n_head=4
 
 数据侧共同使用 exact-dedup keep-last、tail padding + `action_mask`、train-only transition/lift oversampling、episode-level split、deterministic validation、EMA、watchdog 和原子 checkpoint。
 
-## 四条训练路线
+## 训练路线总览
 
 | 路线 | 学习目标 | 推理 | 当前状态 |
 |---|---|---|---|
@@ -55,6 +97,8 @@ d_model=384, n_head=4
 | Diffusion Policy | 回归加入动作的 Gaussian noise | 15步 DDIM | 旧 V3 已完成正式训练 |
 | IMLE | 每个 GT 从多 latent 候选中选择最近 action 回归 | latent 一步生成 | 旧 V3 已完成正式训练 |
 | Video-Aux 世界模型原型 | CFM action loss + 冻结 Wan VAE future-latent loss | 部署仍只运行5步 CFM | 实现与 smoke 通过，尚未正式长训 |
+| Joint WAM | 联合回归 future-video latent 与 action velocity | 联合 ODE 生成未来视频 latent 和16步动作 | 独立分支实现与训练；在线部署仍需 Wan VAE |
+| RDT-170M | 在离散噪声等级下回归64×128干净动作，mask到A2D 13维 | 5步 DPM-Solver | 本分支；训练与部署 adapter 分离 |
 
 不同路线的 loss 数值没有直接可比性。比较时必须锁定 dataset/split、action contract、ViT、batch、optimizer steps、seed、rollout 初始状态和成功判据，最终由同协议闭环 rollout 仲裁。
 
@@ -164,6 +208,8 @@ warmup steps             20,740 (5%)
 |---|---|
 | `main` | 四条训练路线总览、共享数据/训练/部署契约 |
 | [`feat/v3-wan-video-aux-v1`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/feat/v3-wan-video-aux-v1) | 冻结 Wan VAE 的 9+16 future-video auxiliary 原型 |
+| [`feat/a2d-v3-joint-latent-wam-scratch-v1`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/feat/a2d-v3-joint-latent-wam-scratch-v1) | 从零训练的联合视频—动作 Flow Matching；Wan VAE 冻结 |
+| `feat/a2d-rdt170m-adapter` | 官方 RDT-170M 的 A2D V3 数据适配、训练 patch、smoke 与训练入口 |
 | [`feat/task-level-grasp-retry`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/feat/task-level-grasp-retry) | 推理侧 attempt→verify→recover→retry 状态机；不是新训练 policy |
 | [`docs/grasp-success-gallery`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/docs/grasp-success-gallery) | 成功视频、GIF gallery 与 rollout 展示 |
 | [`agent/add-robot-ml-loop-instance`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/agent/add-robot-ml-loop-instance) | robot-ML loop 实例与生命周期编排实验 |
