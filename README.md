@@ -11,7 +11,7 @@ RGB、当前proprio和head相机过去9帧，同时生成未来视频latent与16
 | 路线 | 数据 | 目的 | 状态 |
 |---|---|---|---|
 | CFM baseline | 当前双RGB + proprio → action | 已有动作策略对照 | 已有训练结果 |
-| Joint WAM V1 | 现有V3混合数据 | 先验证视频历史和双Flow loss是否有效 | 已实现，等待A800 |
+| Joint WAM V1 | 现有V3混合数据 | 先验证视频历史和双Flow loss是否有效 | 已完成训练、bundle导出与静态推理接入 |
 | Joint WAM V2 | 两个task的原始连续RGB重新处理 | 恢复严格时间间隔，训练更可靠的视频动力学 | 计划中 |
 
 V1和V2使用相同模型；区别主要在数据时间线和图像处理质量。只有V1产生正向证据后，
@@ -159,11 +159,11 @@ V1使用一次性状态机，在当前混合CFM完整结束后执行：
 
 ## 当前证据与边界
 
-- 全仓测试：`61 passed`；
-- 真实600条数据索引的CPU trainer单步集成通过；
+- 真实600条数据索引、Wan latent cache、正式 scratch 训练和 schema-v3 bundle 导出已经完成；
 - action/video loss均能更新共享Transformer，跨模态梯度测试通过；
-- A800真实Wan cache与GPU smoke尚未完成；
-- rollout侧9帧在线编码尚未实现，因此当前禁止导出部署bundle；
+- 导出模型与部署图已做严格 state-dict key/shape 核对；
+- `fk-issac-logistics/feat/joint-wam-online-rollout-v1` 已实现9帧在线历史与 Wan VAE 条件编码；
+- 仍需在目标GPU完成在线 prefix 与训练 cache 的数值一致性检查，以及 Isaac prediction-only/闭环 smoke；
 - video loss下降不等于动作更好，最终仍由同协议rollout成功率裁决。
 
 ## 代码入口
