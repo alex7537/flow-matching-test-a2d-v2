@@ -10,6 +10,18 @@
 
 [查看高清 MP4](docs/assets/grasp_success_grid_10x10.mp4) · [查看完整选片清单](docs/assets/grasp_success_grid_10x10_sources.json) · [查看旧版 2×2 GIF](docs/assets/grasp_success_montage.gif)
 
+## 20 次成功抓取：腕部相机（自动循环）
+
+![20 次腕部相机成功抓取](docs/assets/wrist_success_grid_20.gif)
+
+5 列 × 4 排：上两排为 B19V2 瓶子，下两排为 A10V1 盒子，各 10 条。每格标注 CLS CFM、49-patch CFM 或 Wan latest 模型及测试轮次。
+
+这些片段来自独立的视频采集批次，采用 H16、300 动作上限、逐步 RPC＋GT。成功条件为目标相对初始高度抬升至少 5 cm，同时拇指及至少两根其他手指接触力超过 1e-4 N，连续满足 5 个动作观测点；后续掉落不取消成功。本展示不采用上方 v17 的严格 10 cm 筛选，也不代表模型成功率或公平排名。
+
+画面为 `rgb_right_hand`，涵盖接近、抓取和抬升。原视频按 30 FPS 保存，GIF 以 6 FPS 展示约 10 秒的完整片段；播放时间不等同于实际测试墙钟耗时。
+
+[查看高清腕部 MP4](docs/assets/wrist_success_grid_20.mp4) · [查看 20 条来源清单](docs/assets/wrist_success_grid_20_sources.json)
+
 ## 数据
 
 当前使用 `a2d-450GB` 的 1,090 个成功 episodes：
