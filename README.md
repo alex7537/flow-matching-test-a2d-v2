@@ -181,11 +181,13 @@ DP 与 IMLE 当前是仓库内的策略路线，而不是两个独立远端产�
 | 本仓库训练路线 | bundle | 推理仓库分支 |
 |---|---|---|
 | Native CFM (`main`) | `flow_matching` schema v2 | `main` |
+| Diffusion Policy (`main`) | `diffusion` schema v2 | `feat/native-dp-imle-online-rollout-v2` |
+| IMLE (`main`) | `imle` schema v2 | `feat/native-dp-imle-online-rollout-v2` |
 | Joint WAM | `joint_latent_wam` schema v3 | `feat/joint-wam-online-rollout-v1` |
 | RDT-170M | `rdt_170m_a2d` schema v4 | `feat/rdt170m-online-rollout-v2` |
 
-DP/IMLE的训练与离线采样代码仍保留在本仓库；本轮暂不迁移到`fk-issac-logistics`
-稳定runtime，因此不在上表宣称Isaac在线支持。
+DP/IMLE已在独立推理分支通过真实bundle加载和prediction-only检查；尚未完成Isaac闭环，
+因此不能把“可加载”表述为“抓取有效”。
 
 ## 训练
 
