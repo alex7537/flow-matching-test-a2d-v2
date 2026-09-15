@@ -1,6 +1,6 @@
 # A2D Continuous-Action Policy Research
 
-本仓库围绕 A2D 机器人抓取任务比较四条连续动作生成路线：Conditional Flow Matching、Diffusion Policy、IMLE，以及训练期加入未来视频 latent 监督的 Video-Aux 世界模型原型。共同目标是根据双相机 RGB 和可选 proprio，生成未来 16 步、每步 13 维的绝对关节目标。
+本仓库围绕 A2D 机器人抓取任务比较原生连续动作策略（Conditional Flow Matching、Diffusion Policy、IMLE）、视频辅助训练、Joint WAM和RDT迁移路线。共同目标是从视觉与机器人状态生成可部署的连续关节动作。
 
 `main` 是数据契约、共享模型组件、训练入口和路线总览；专项分支只维护各自实验，不要求 README 完全相同。
 
@@ -47,7 +47,7 @@ d_model=384, n_head=4
 
 数据侧共同使用 exact-dedup keep-last、tail padding + `action_mask`、train-only transition/lift oversampling、episode-level split、deterministic validation、EMA、watchdog 和原子 checkpoint。
 
-## 四条训练路线
+## 主线与专项训练路线
 
 | 路线 | 学习目标 | 推理 | 当前状态 |
 |---|---|---|---|
@@ -55,6 +55,8 @@ d_model=384, n_head=4
 | Diffusion Policy | 回归加入动作的 Gaussian noise | 15步 DDIM | 旧 V3 已完成正式训练 |
 | IMLE | 每个 GT 从多 latent 候选中选择最近 action 回归 | latent 一步生成 | 旧 V3 已完成正式训练 |
 | Video-Aux 世界模型原型 | CFM action loss + 冻结 Wan VAE future-latent loss | 部署仍只运行5步 CFM | 实现与 smoke 通过，尚未正式长训 |
+| Joint WAM | future-video latent与action双Flow loss | 联合ODE生成视频latent和16步动作 | 独立专项分支 |
+| RDT-170M | masked clean-action regression | 5步DPM-Solver生成64步动作 | 独立迁移分支 |
 
 不同路线的 loss 数值没有直接可比性。比较时必须锁定 dataset/split、action contract、ViT、batch、optimizer steps、seed、rollout 初始状态和成功判据，最终由同协议闭环 rollout 仲裁。
 
@@ -164,11 +166,26 @@ warmup steps             20,740 (5%)
 |---|---|
 | `main` | 四条训练路线总览、共享数据/训练/部署契约 |
 | [`feat/v3-wan-video-aux-v1`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/feat/v3-wan-video-aux-v1) | 冻结 Wan VAE 的 9+16 future-video auxiliary 原型 |
+| [`feat/a2d-v3-joint-latent-wam-scratch-v1`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/feat/a2d-v3-joint-latent-wam-scratch-v1) | 从零训练的视频—动作联合Flow Matching与schema-v3 bundle |
+| [`feat/a2d-rdt170m-adapter`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/feat/a2d-rdt170m-adapter) | RDT-170M数据映射、训练patch、smoke与schema-v4 bundle |
 | [`feat/task-level-grasp-retry`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/feat/task-level-grasp-retry) | 推理侧 attempt→verify→recover→retry 状态机；不是新训练 policy |
 | [`docs/grasp-success-gallery`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/docs/grasp-success-gallery) | 成功视频、GIF gallery 与 rollout 展示 |
 | [`agent/add-robot-ml-loop-instance`](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/agent/add-robot-ml-loop-instance) | robot-ML loop 实例与生命周期编排实验 |
 
 DP 与 IMLE 当前是仓库内的策略路线，而不是两个独立远端产品分支；不要为了 README 复制出空分支。
+
+## 训练与Isaac推理映射
+
+推理仓库：[`alex7537/fk-issac-logistics`](https://github.com/alex7537/fk-issac-logistics)。
+
+| 本仓库训练路线 | bundle | 推理仓库分支 |
+|---|---|---|
+| Native CFM (`main`) | `flow_matching` schema v2 | `main` |
+| Joint WAM | `joint_latent_wam` schema v3 | `feat/joint-wam-online-rollout-v1` |
+| RDT-170M | `rdt_170m_a2d` schema v4 | `feat/rdt170m-online-rollout-v2` |
+
+DP/IMLE的训练与离线采样代码仍保留在本仓库；本轮暂不迁移到`fk-issac-logistics`
+稳定runtime，因此不在上表宣称Isaac在线支持。
 
 ## 训练
 
