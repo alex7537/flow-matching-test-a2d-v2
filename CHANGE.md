@@ -2,6 +2,15 @@
 
 本文件按时间倒序记录项目的重要更新；后续每次完成代码、数据、训练或部署交付后，在顶部追加一条，并记录对应 Git commit 与验收结果。
 
+## 2026-09-15｜重写Joint WAM架构README
+
+- 将README改为按`input → encoder/压缩 → token → self/cross attention → 双head → loss → 推理`展开；
+- 明确当前双RGB、13D proprio、9帧head视频及未来video/action的全部shape；
+- 明确`99 + 147 = 246`个condition tokens和`196 + 16 = 212`个generated tokens；
+- 展示4-head self-attention与cross-attention的Q/K/V来源和attention矩阵形状；
+- 明确推理只将generated future latent保存在内存，当前没有Wan decoder或MP4输出；
+- 未修改训练配置、模型代码、checkpoint、数据或推理行为。
+
 ## 2026-09-03｜Joint WAM V1/V2路线冻结
 
 - V1固定使用现有box300+bottle300 V3数据，先验证9帧历史、双Flow loss和Joint Transformer；当前状态机等待前序CFM结束。
