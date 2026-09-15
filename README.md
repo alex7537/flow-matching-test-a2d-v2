@@ -44,7 +44,7 @@ L_rdt = masked_MSE(predicted_clean_action, action)
 
 对应的 Isaac 在线推理 adapter 位于个人仓库
 [`fk-issac-logistics`](https://github.com/alex7537/fk-issac-logistics) 的
-`feat/rdt170m-online-rollout-v1` 分支。RDT bundle 仍需外置、SHA 固定的 SigLIP 权重；训练代码与推理资产不混入 Git。
+`feat/rdt170m-online-rollout-v2` 分支。该分支直接基于推理仓库`main`，不继承Joint WAM/Wan runtime。RDT bundle 仍需外置、SHA 固定的 SigLIP 权重；训练代码与推理资产不混入 Git。
 
 ## 共同契约
 
