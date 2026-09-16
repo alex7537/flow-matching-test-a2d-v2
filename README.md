@@ -80,6 +80,10 @@ python3 watch.py --cycle runs/my_cycle --interval 60 --max-hours 72
 
 详细入口：[工具说明](tools/a2d_eval_loop/README.md) · [闭环说明](docs/A2D_EVAL_LOOP.md) · [开源参考](tools/a2d_eval_loop/docs/OPEN_SOURCE_PATTERNS.md) · [原始 loop 方案](docs/LOOP_FIRST_INSTANCE.md)
 
+后续验收路线见 [评测路线与阶段门槛](docs/A2D_EVAL_LOOP.md#推荐执行顺序与验收门槛)：
+先完成 runner/smoke/恢复合同与完整初态标定，再做小规模受控比较、完整验收和训练交接。
+该路线是设计要求，未改变 V0 执行协议、主成功指标或人工确认规则。
+
 ---
 
 ## 原训练仓库说明
