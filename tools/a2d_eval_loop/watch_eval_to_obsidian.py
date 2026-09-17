@@ -17,6 +17,35 @@ def process_token(pid):
         return None if fields[0]=='Z' else fields[19]
     except (OSError,ValueError):return None
 
+def overview(plans):
+    lines=['## 本轮目标与参数', '', '| 项目 | 配置 |', '|---|---|']
+    def row(label,value):
+        clean=str(value).replace('|','／').replace('\n',' ')
+        lines.append(f'| {label} | {clean} |')
+    for scene,p in plans.items():
+        prefix=scene+' · ' if len(plans)>1 else ''
+        quota=p.get('target_failures_per_model');count=p.get('episodes_per_configuration','未记录')
+        row(prefix+'目标',f"每模型收集 {quota} 次完整失败，最多尝试 {count} 次" if quota else f"比较模型抓取表现，每模型 × 执行模式计划 {count} 次")
+        row(prefix+'模型','、'.join(p.get('models',{})))
+        display=p.get('server_display','未记录')
+        if str(display).startswith('headless'):display='headless'
+        row(prefix+'场景',f"{p.get('scene',scene)}；{display}")
+        modes=[{'step_gt':'逐步 RPC＋GT（动作逐个下发）','batch16':'合并16动作 RPC'}.get(m,m) for m in p.get('modes',['step_gt'])]
+        row(prefix+'执行', '、'.join(modes)+f"；H={p.get('horizon','未记录')}；每轮最多 {p.get('max_steps','未记录')} 个动作")
+        seeds=p.get('scene_seeds',[])
+        seed_text=f"请求场景 seed {seeds[0]}…{seeds[-1]}（{len(seeds)} 个，详见计划）" if seeds else '场景 seed 未记录'
+        row(prefix+'种子',f"模型 seed={p.get('policy_seed','未记录')}；{seed_text}")
+        metric=p.get('metric','未记录')
+        if metric=='ever lift>=0.05m and thumb + two other fingers >1e-4N for 5 action observations; report diagnostic, not fixed duration':
+            metric='拇指＋至少另外两指接触力>1e-4 N，且抬升≥5 cm，连续5个动作后采样；之后掉落不扣分'
+        row(prefix+'成功判据',metric)
+        cameras=p.get('video_cameras')
+        if cameras:
+            row(prefix+'视频','＋'.join({'rgb_head':'头部','rgb_right_hand':'右腕'}.get(c,c) for c in cameras)+('；仅完整失败保留；MP4＋GIF' if quota else '；保存策略见计划'))
+        row(prefix+'初态', '布局恢复已启用（是否配对须看验收）' if p.get('layout_replay') is True else '未启用布局恢复；相同 seed 不保证实际初态一致' if p.get('layout_replay') is False else '布局恢复状态未记录；相同 seed 不保证初态一致')
+    lines+=['', '参数来自各场景 `plan.json`；修改目标或参数时新建批次，历史报告保留原配置。', '']
+    return lines
+
 def report(batch, vault, owner_alive=True):
     records=[];warnings=[];evidence={};plans={};statuses={};seen=set()
     for plan_file in sorted(batch.glob('*/plan.json')):
@@ -40,7 +69,7 @@ def report(batch, vault, owner_alive=True):
     if qstate=='waiting_previous_batch' and owner_alive:state='排队等待前一批次'
     now=datetime.datetime.now().astimezone().isoformat(timespec='seconds')
     rows=[]
-    text=[f'# {batch.name}', '',f'状态：**{state}**｜已记录 {len(records)}/{len(expected)} 次｜更新：{now}', '', '| 场景 | 模型 | 已记录/计划 | 成功/有效 | 成功率 | 无效 | 失败现象：无接触/未达5cm/持续不足 |','|---|---|---:|---:|---:|---:|---|']
+    text=[f'# {batch.name}', '']+overview(plans)+[f'状态：**{state}**｜已记录 {len(records)}/{len(expected)} 次｜更新：{now}', '', '| 场景 | 模型 | 已记录/计划 | 成功/有效 | 成功率 | 无效 | 失败现象：无接触/未达5cm/持续不足 |','|---|---|---:|---:|---:|---:|---|']
     for scene,p in plans.items():
         for model in p['models']:
             rs=[r for r in records if r['scene']==scene and r['model']==model]
@@ -54,7 +83,7 @@ def report(batch, vault, owner_alive=True):
     for scene,p in plans.items():
         if p.get('target_failures_per_model'):
             text+=['',f"失败视频采集：每模型目标 {p['target_failures_per_model']} 次，计划尝试数为上限；定向采集不能作为无偏成功率比较。"]
-        text+=['',f"{scene}：{p.get('metric','见 plan.json')}；H={p.get('horizon')}；动作上限={p.get('max_steps')}；模型 seed={p.get('policy_seed')}；模式={p.get('modes')}。",f"初态限制：{p.get('pairing_limit',p.get('comparison_limit','见 plan.json'))}"]
+
         current=statuses[scene].get('current')
         if not complete and current:text.append(f"最近进度：{current.get('model')} / 回合 {current.get('episode')} / {current.get('executed')} 动作（非新增终态）。")
     partial=[]

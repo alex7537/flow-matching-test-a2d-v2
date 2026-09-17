@@ -23,6 +23,12 @@ class ReportTests(unittest.TestCase):
   self.ledger([self.row,self.row])
   with (self.batch/'box/episodes.jsonl').open('a') as f:f.write('{"partial":')
   x=reporter.report(self.batch,self.vault,False);self.assertEqual(x['recorded'],1);self.assertEqual(len(x['warnings']),2);self.assertFalse(x['complete'])
+ def test_overview_precedes_results_and_preserves_plan(self):
+  self.ledger([self.row]);reporter.report(self.batch,self.vault,True)
+  text=(self.batch/'AUTO_REPORT.md').read_text()
+  self.assertLess(text.index('本轮目标与参数'),text.index('成功/有效'))
+  self.assertIn('计划 2 次',text)
+  self.assertIn('seed=未记录',text)
  def test_pause_and_gallery_review(self):
   self.ledger([self.row])
   for q,expected in [('paused','暂停'),('awaiting_human_review','采集结束／等待确认')]:
