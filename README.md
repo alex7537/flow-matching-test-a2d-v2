@@ -407,3 +407,9 @@ best checkpoint 时会自动生成 `eval_bundles/eval_bundle_<run>_step<step>.tg
 Mimic 资产，让另外 5 个手部关节按资产内规则联动：拇指 `1_3 = 1.675 * 1_2`，
 其余四指的远端关节与对应近端关节保持 `1.0` 倍。rollout 只下发上述 6 个主动
 手部 DOF，不应再额外拟合或重复下发 11 个手部 DOF。
+
+## 自动记录到 Obsidian
+
+新增 `tools/a2d_eval_loop/watch_eval_to_obsidian.py`：独立观察已有测试，每分钟更新报告；完成、暂停或中断时保留已落盘结果。运行时明确指定批次目录和本地 vault，不依赖个人机器的固定路径。
+
+[输入格式、启动命令与恢复说明](tools/a2d_eval_loop/docs/AUTO_REPORT.md)。测试 runner 和视频/GIF 制作仍是外部组件；本工具不自动上传、不启动下一轮训练。
