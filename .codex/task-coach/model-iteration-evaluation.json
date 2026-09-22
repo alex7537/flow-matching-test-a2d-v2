@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "revision": 15,
+  "objective": "Build an evidence-driven loop that improves the offset-1 A2D policy and evaluates it from offline diagnostics through calibrated Isaac rollouts and a later world-model proxy",
+  "acceptance_criteria": [
+    "Every compared checkpoint is bound to immutable source, data, split, stats, config, seed, step, and artifact identities",
+    "A frozen E0-E3 evaluation funnel ranks candidates without treating offline loss as task success",
+    "At least one controlled offset-1 model iteration is selected from measured failure evidence",
+    "The first real case produces concrete requirements for the generic Loop runner and future schema 3"
+  ],
+  "status": "active",
+  "status_reason": null,
+  "created_at": "2026-08-14T09:34:40.263072Z",
+  "updated_at": "2026-08-14T09:55:23.223451Z",
+  "steps": [
+    {
+      "id": "M1",
+      "title": "Establish repository and evaluation baseline",
+      "outcome": "A source-backed map of the existing trainer, policies, artifacts, evaluation harness, and blockers",
+      "verification": "docs/LOOP_FIRST_INSTANCE.md references commit fd2b751 and concrete repository files",
+      "depends_on": [],
+      "status": "completed",
+      "evidence": [
+        "Repository commit fd2b751 mapped; docs/LOOP_FIRST_INSTANCE.md records existing capabilities, evidence levels, and blockers"
+      ],
+      "status_reason": null,
+      "created_at": "2026-08-14T09:34:40.306729Z",
+      "updated_at": "2026-08-14T09:34:40.705827Z"
+    },
+    {
+      "id": "M2",
+      "title": "Resolve remote data and artifact state",
+      "outcome": "Exact offset-1 dataset, split, stats, run, step, checkpoint, and exposure identities are known",
+      "verification": "Read-only manifests, hashes, resolved configs, W&B/run IDs, and artifact locations are recorded",
+      "depends_on": [
+        "M1"
+      ],
+      "status": "in_progress",
+      "evidence": [
+        "Read-only audit of yurui_dev_flowmatching_issac resolved source commit, 1090-episode offset-1 dataset and split hashes, active W&B run xifmcqbp, checkpoint/bundle identities, and current metrics; remaining evidence is label semantics, trial exposure, and the actual Isaac node."
+      ],
+      "status_reason": "Training-machine artifact state is resolved, but this SSH target has no detectable Isaac runtime/assets and rollout exposure identities remain unknown.",
+      "created_at": "2026-08-14T09:34:40.350287Z",
+      "updated_at": "2026-08-14T09:55:23.119937Z"
+    },
+    {
+      "id": "M3",
+      "title": "Freeze and implement offline evaluation contract",
+      "outcome": "E0-E2 metrics run with fixed samples and seeds and emit a comparable report",
+      "verification": "Tests plus a versioned evaluation manifest and report for at least one offset-1 checkpoint",
+      "depends_on": [
+        "M2"
+      ],
+      "status": "pending",
+      "evidence": [],
+      "status_reason": null,
+      "created_at": "2026-08-14T09:34:40.397971Z",
+      "updated_at": "2026-08-14T09:34:40.397971Z"
+    },
+    {
+      "id": "M4",
+      "title": "Calibrate Isaac evaluation environment",
+      "outcome": "Observation, action, timing, physics, and success-checker gates pass on the designated Isaac machine",
+      "verification": "GT replay and calibration artifacts pass the staged rollout checklist",
+      "depends_on": [
+        "M2"
+      ],
+      "status": "pending",
+      "evidence": [],
+      "status_reason": null,
+      "created_at": "2026-08-14T09:34:40.440027Z",
+      "updated_at": "2026-08-14T09:34:40.440027Z"
+    },
+    {
+      "id": "M5",
+      "title": "Run one controlled model iteration",
+      "outcome": "One falsifiable model or training change is compared against the valid offset-1 baseline",
+      "verification": "Matched-step E0-E2 comparison with explicit promote, retry, or stop decision",
+      "depends_on": [
+        "M3"
+      ],
+      "status": "pending",
+      "evidence": [],
+      "status_reason": null,
+      "created_at": "2026-08-14T09:34:40.481320Z",
+      "updated_at": "2026-08-14T09:34:40.481320Z"
+    },
+    {
+      "id": "M6",
+      "title": "Run closed-loop candidate comparison",
+      "outcome": "Candidates receive paired diagnostic and promotion rollout evidence with stage failures and uncertainty",
+      "verification": "Isaac report binds checkpoint, trial-role manifests, seeds, simulator contract, and metrics",
+      "depends_on": [
+        "M4",
+        "M5"
+      ],
+      "status": "pending",
+      "evidence": [],
+      "status_reason": null,
+      "created_at": "2026-08-14T09:34:40.531129Z",
+      "updated_at": "2026-08-14T09:34:40.531129Z"
+    },
+    {
+      "id": "M7",
+      "title": "Pilot world-model proxy evaluation",
+      "outcome": "A compatible world-model evaluator is tested for ranking correlation without becoming promotion authority prematurely",
+      "verification": "Independent checkpoint/trial study reports correlation, calibration, and false-promotion rate against rollout outcomes",
+      "depends_on": [
+        "M6"
+      ],
+      "status": "pending",
+      "evidence": [],
+      "status_reason": null,
+      "created_at": "2026-08-14T09:34:40.573077Z",
+      "updated_at": "2026-08-14T09:34:40.573077Z"
+    },
+    {
+      "id": "M8",
+      "title": "Refine the generic Loop from case evidence",
+      "outcome": "Runner and schema changes are limited to requirements repeatedly observed in this project",
+      "verification": "A reviewed change list maps each generic mechanism to concrete case evidence and tests",
+      "depends_on": [
+        "M5"
+      ],
+      "status": "pending",
+      "evidence": [],
+      "status_reason": null,
+      "created_at": "2026-08-14T09:34:40.621714Z",
+      "updated_at": "2026-08-14T09:34:40.621714Z"
+    }
+  ],
+  "feedback": [
+    {
+      "timestamp": "2026-08-14T09:55:23.172187Z",
+      "step_id": "M5",
+      "kind": "attempted_success",
+      "message": "The first live case exposed an actionable model-selection signal: RGB-only best EMA val action MSE 0.0086918 is materially worse than the preceding proprioceptive run at 0.0037390, while validation loss degrades after early epochs. The Loop must distinguish run completion from checkpoint promotion and compare best checkpoints under fixed E0-E2 evidence."
+    },
+    {
+      "timestamp": "2026-08-14T09:55:23.223218Z",
+      "step_id": "M4",
+      "kind": "blocker",
+      "message": "SSH target yurui_dev_flowmatching_issac currently exposes an A800 training environment but no project USD/USDA assets, Isaac/Omniverse process, or importable isaacsim/omni/isaaclab packages; identify the actual configured Isaac machine before E3 calibration."
+    }
+  ]
+}
