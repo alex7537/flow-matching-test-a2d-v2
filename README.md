@@ -1,157 +1,60 @@
-# Flow Matching Test
+# Robot Imitation Learning for A2D Manipulation
 
-基于 A2D 机器人抓取数据训练连续关节动作策略。当前主线是双 RGB、可选 proprio 条件的 Flow Matching，输出未来 16 步绝对 joint action。
+[中文技术记录](README.zh-CN.md) · [Main research overview](https://github.com/alex7537/flow-matching-test-a2d-v2) · [Personal website](https://alex7537.github.io/)
 
-## 100 次成功抓取展示（自动循环）
+This project trains vision-conditioned policies to generate continuous arm and hand actions from demonstrations, and evaluates them in Isaac simulation. **Conditional Flow Matching is the main grasping baseline**; Diffusion Policy and IMLE are implemented as alternative policy families.
 
-![100 次成功抓取 10×10 拼接](docs/assets/grasp_success_grid_10x10.gif)
+This branch presents rollout examples and the historical V3 training setup. The [main branch](https://github.com/alex7537/flow-matching-test-a2d-v2) tracks the broader research pipeline and newer experiments.
 
-10×10 展示从 v17 评测中均衡选取 100 段严格 10cm 成功视频，每个模型 25 段。四个 5×5 象限依次为：左上 best EMA、右上 epoch-100 raw、左下 latest raw、右下 RGB-only final raw。边框颜色表示 execute horizon：蓝色 H4、绿色 H8、橙色 H16。
+## Demonstrated behavior
 
-[查看高清 MP4](docs/assets/grasp_success_grid_10x10.mp4) · [查看完整选片清单](docs/assets/grasp_success_grid_10x10_sources.json) · [查看旧版 2×2 GIF](docs/assets/grasp_success_montage.gif)
+![Four selected successful grasp rollouts in Isaac simulation](docs/assets/grasp_success_montage.gif)
 
-## 20 次成功抓取：腕部相机（自动循环）
+The montage shows selected successful simulated grasp rollouts. **It demonstrates individual behaviors, not an aggregate success rate or a ranking of policy families.**
 
-![20 次腕部相机成功抓取](docs/assets/wrist_success_grid_20.gif)
+- [Scene-view MP4](docs/assets/grasp_success_montage.mp4)
+- [100 selected successes: GIF](docs/assets/grasp_success_grid_10x10.gif) · [MP4](docs/assets/grasp_success_grid_10x10.mp4) · [Source manifest](docs/assets/grasp_success_grid_10x10_sources.json)
+- [20 wrist-camera examples: GIF](docs/assets/wrist_success_grid_20.gif) · [MP4](docs/assets/wrist_success_grid_20.mp4) · [Source manifest](docs/assets/wrist_success_grid_20_sources.json)
 
-5 列 × 4 排：上两排为 B19V2 瓶子，下两排为 A10V1 盒子，各 10 条。每格标注 CLS CFM、49-patch CFM 或 Wan latest 模型及测试轮次。
+The 100-clip gallery uses the v17 strict 10 cm lift selection. The wrist gallery is a separate batch with a 5 cm lift and multi-finger contact criterion; later drops do not revoke success in that batch. These galleries use different criteria and should not be combined into one score. See the [Chinese technical record](README.zh-CN.md) for the complete selection rules.
 
-这些片段来自独立的视频采集批次，采用 H16、300 动作上限、逐步 RPC＋GT。成功条件为目标相对初始高度抬升至少 5 cm，同时拇指及至少两根其他手指接触力超过 1e-4 N，连续满足 5 个动作观测点；后续掉落不取消成功。本展示不采用上方 v17 的严格 10 cm 筛选，也不代表模型成功率或公平排名。
+## Model and data flow
 
-画面为 `rgb_right_hand`，涵盖接近、抓取和抬升。原视频按 30 FPS 保存，GIF 以 6 FPS 展示约 10 秒的完整片段；播放时间不等同于实际测试墙钟耗时。
-
-[查看高清腕部 MP4](docs/assets/wrist_success_grid_20.mp4) · [查看 20 条来源清单](docs/assets/wrist_success_grid_20_sources.json)
-
-## 数据
-
-当前使用 `a2d-450GB` 的 1,090 个成功 episodes：
-
-```text
-原始帧数             180,087
-V3 exact-dedup 后    179,160
-train / val          981 / 109 episodes
-基础训练窗口          160,206
-有效训练样本          220,026
-验证样本              17,864
+```mermaid
+flowchart LR
+    A["Head RGB + wrist RGB"] --> B["Shared pretrained Hybrid ViT"]
+    B --> C["Visual tokens + optional joint-state token"]
+    C --> D["Action Transformer / Conditional Flow Matching"]
+    N["Gaussian action noise"] --> D
+    D --> E["16-step x 13-D action chunk"]
+    E --> F["Isaac closed-loop rollout"]
 ```
 
-V3 数据语义：
+| Component | Design used in the main CFM baseline |
+|---|---|
+| Visual backbone | ImageNet-pretrained `vit_small_r26_s32_224`; shared between the two views, with 49 spatial tokens per view |
+| Action model | 4-layer Transformer, hidden dimension 384, 4 attention heads |
+| Learning objective | Conditional Flow Matching: learn the velocity from Gaussian noise toward demonstration action chunks |
+| Inference | 5 Euler integration steps to generate an action chunk |
+| Observation / target | Current RGB and optional actual joint state → the next 16 steps; 7 executed arm-joint positions + 6 commanded hand-joint targets |
 
-```text
-observation/qpos = arm2_pos(7) + hand2_pos(6)
-                  实际手臂 joint + 实际手部 joint
+## Engineering work in this repository
 
-action label     = arm2_pos(7) + hand2_pos_target(6)
-                  实际手臂轨迹 + 手部 commanded target
-```
+- A shared observation/action interface for Flow Matching, Diffusion Policy, and IMLE.
+- Demonstration preprocessing with exact duplicate removal, episode-level splits, masked tail padding, and transition/lift sampling.
+- Training with deterministic validation, EMA weights, and recoverable checkpoint artifacts.
+- Deployment bundles that record action semantics and checkpoint provenance, plus rollout examples with source manifests.
 
-V2 的手部标签使用实际 `hand2_pos`，包含接触、回弹和跟踪误差。V3 改为学习 `hand2_pos_target`，让模型学习稳定的手部控制意图；observation 仍使用机器人当前的实际 joint state。
+The historical setup documented on this branch uses **1,090 successful demonstration episodes**, split into 981 training and 109 validation episodes. This is a training-data count, not a rollout success rate. Offline loss and selected videos alone do not establish comparative closed-loop performance.
 
-## 输入与输出
+## Where to look next
 
-当前有两组受控实验：
+| Question | Entry point |
+|---|---|
+| How is the CFM policy implemented? | [Flow Matching policy](flow_matching_test/policies/flow_matching.py) |
+| Which backbone and training settings are used? | [Historical V3 configuration](configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_100ep_scratch.yaml) |
+| How are demonstrations processed? | [Data pipeline](docs/DATA_PIPELINE.md) |
+| Where are the detailed experiment notes and commands? | [Original Chinese README](README.zh-CN.md) |
+| What other model routes are being explored? | [Main-branch overview](https://github.com/alex7537/flow-matching-test-a2d-v2) |
 
-| 实验 | 输入 | 输出 |
-|---|---|---|
-| RGB+proprio | `rgb_head`、`rgb_right_hand`、当前 13 维实际 qpos | `[16,13]` action chunk |
-| RGB-only | `rgb_head`、`rgb_right_hand` | `[16,13]` action chunk |
-
-时间对齐：
-
-```text
-obs[t]   -> action[t+1 : t+17]
-obs[t+1] -> action[t+2 : t+18]
-```
-
-窗口 stride 为 1，相邻训练样本共享 15 个未来 action。
-
-## 模型与策略
-
-- 视觉 encoder：ImageNet 预训练 `vit_small_r26_s32_224`；
-- 两路相机共用 ViT，每路保留 49 个 spatial tokens；
-- proprio 版本将归一化 13 维 qpos 投影为一个 384 维 token；
-- action model：4 层 Transformer，`d_model=384`、`n_head=4`；
-- policy：Conditional Flow Matching；训练预测 velocity，推理使用 5 步 Euler 积分；
-- ViT 全量可训练，backbone LR 是 action head LR 的 `0.1×`；
-- EMA 权重用于独立 checkpoint 选择与 rollout 对比。
-
-仓库同时保留 RS-IMLE 和 Diffusion Policy 实现，但当前抓取主线使用 Flow Matching。不同 policy 的 loss 数值不能直接比较，最终以同协议 rollout 为准。
-
-## 训练预算
-
-RGB+proprio 与 RGB-only 使用相同数据和预算，只改变 `use_proprio`：
-
-```text
-batch size             32
-steps / epoch          6,876
-epochs                 100
-total steps            687,600
-warmup steps           34,380（前5轮）
-head peak LR           1e-4
-ViT peak LR            1e-5
-schedule               linear warmup + cosine decay
-seed                   42
-```
-
-Sampling：
-
-```text
-transition windows     16,520，train 2×
-lift windows           43,300，train 2×
-tail padded windows    train 14,715 / val 1,635
-```
-
-训练集启用图像 augmentation；验证集不增强、不 oversample，并使用固定 seed。每轮记录 train/val、continuous/keyframe/lift loss、sample action MSE、EMA 指标、梯度和学习率。
-
-## 已完成的关键改动
-
-1. `action_offset_steps=1`：当前 observation 预测下一帧开始的 16 步动作；
-2. exact-dedup keep-last：删除完全重复的 joint frame，同时保留重复段最后一帧；
-3. tail padding + `action_mask`：保留 episode 最后 15 个窗口，padding 不参与 loss，避免丢失最终 lift；
-4. lift/transition oversampling：增加关键动作在训练中的曝光；
-5. V3 hybrid action：arm 学习实际平滑轨迹，hand 学习 commanded target；
-6. action contract：dataset、stats、checkpoint、bundle、rollout 均校验 V2/V3 语义；
-7. `use_proprio` 开关：在完全相同预算下比较 RGB+proprio 与纯 RGB；
-8. deterministic validation、EMA、watchdog 和原子 checkpoint 保存。
-
-详细历史见 [`CHANGE.md`](CHANGE.md)。
-
-## 训练
-
-RGB+proprio：
-
-```bash
-python3 -u -m flow_matching_test.train \
-  --config configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_100ep_scratch.yaml
-```
-
-纯 RGB：
-
-```bash
-python3 -u -m flow_matching_test.train \
-  --config configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_rgb_only_100ep_scratch.yaml
-```
-
-重要产物：
-
-```text
-metrics.jsonl
-latest.ckpt
-best_val_loss.ckpt
-best_action_mse.ckpt
-best_ema_action_mse.ckpt
-summary.json
-```
-
-部署时优先测试 action-MSE checkpoint，不默认最后一轮最好。部署 bundle 会记录 action 语义、raw/EMA 权重、epoch/step、数据版本及 SHA256；bundle 不包含 optimizer，不能用于完整 resume。
-
-## 文档
-
-- [`CHANGE.md`](CHANGE.md)：倒序更新记录；
-- [`docs/RTC_EXECUTE_HORIZON_PLAN.md`](docs/RTC_EXECUTE_HORIZON_PLAN.md)：RTC 跨 chunk 连续性、异步推理与动态 execute horizon 的分阶段方案；
-- [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：数据、padding、mask 与 oversampling；
-- [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR；
-- [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练与停止判断；
-- [`artifacts_index.md`](artifacts_index.md)：外部训练和部署产物索引。
-
-训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git。
+Foundation models and policy methods are existing building blocks. This repository focuses on their implementation, data contracts, training, and deployment for the A2D task.
