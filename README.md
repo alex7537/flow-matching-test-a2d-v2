@@ -1,6 +1,8 @@
 # Robot Imitation Learning for A2D Manipulation
 
-[中文技术记录](README.zh-CN.md) · [Main research overview](https://github.com/alex7537/flow-matching-test-a2d-v2) · [Personal website](https://alex7537.github.io/)
+**English** | [简体中文](README.zh-CN.md)
+
+[Main research overview](https://github.com/alex7537/flow-matching-test-a2d-v2) · [Personal website](https://alex7537.github.io/)
 
 This project trains vision-conditioned policies to generate continuous arm and hand actions from demonstrations, and evaluates them in Isaac simulation. **Conditional Flow Matching is the main grasping baseline**; Diffusion Policy and IMLE are implemented as alternative policy families.
 
