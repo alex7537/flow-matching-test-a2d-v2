@@ -55,8 +55,23 @@ The historical setup documented on this branch uses **1,090 successful demonstra
 |---|---|
 | How is the CFM policy implemented? | [Flow Matching policy](flow_matching_test/policies/flow_matching.py) |
 | Which backbone and training settings are used? | [Historical V3 configuration](configs/a2d_450gb_v3_hybrid_hand_target_cfm_a800_100ep_scratch.yaml) |
-| How are demonstrations processed? | [Data pipeline](docs/DATA_PIPELINE.md) |
+| How are demonstrations processed? | [Data pipeline](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/DATA_PIPELINE.md) |
 | Where are the detailed experiment notes and commands? | [Original Chinese README](README.zh-CN.md) |
 | What other model routes are being explored? | [Main-branch overview](https://github.com/alex7537/flow-matching-test-a2d-v2) |
 
 Foundation models and policy methods are existing building blocks. This repository focuses on their implementation, data contracts, training, and deployment for the A2D task.
+
+
+The guides below describe the shared system on the main branch. This gallery branch retains its historical configuration and experiment record; model routes and budgets must be interpreted in that context.
+
+## Technical guides / 技术文档
+
+| Topic | English | 简体中文 |
+|---|---|---|
+| Data pipeline | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/DATA_PIPELINE.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/DATA_PIPELINE.zh-CN.md) |
+| Vision encoder | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/VISION_ENCODER.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/VISION_ENCODER.zh-CN.md) |
+| Training budget | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/TRAINING_PLANNING_GUIDE.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/TRAINING_PLANNING_GUIDE.zh-CN.md) |
+| Training practices | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/TRAINING_TRICKS_GUIDE.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/TRAINING_TRICKS_GUIDE.zh-CN.md) |
+| Policy comparison | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/POLICY_COMPARISON_PROTOCOL.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/POLICY_COMPARISON_PROTOCOL.zh-CN.md) |
+| Deployment | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/DEPLOYMENT_OVERVIEW.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/DEPLOYMENT_OVERVIEW.zh-CN.md) |
+| Artifact index | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/artifacts_index.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/artifacts_index.zh-CN.md) |

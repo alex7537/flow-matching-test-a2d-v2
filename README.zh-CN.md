@@ -157,3 +157,18 @@ summary.json
 - [`artifacts_index.md`](artifacts_index.md)：外部训练和部署产物索引。
 
 训练数据、checkpoint、W&B 目录和 bundle 本体不进入 Git。
+
+
+以下指南位于 main 分支；本展示分支的历史配置、数据版本与评测规则仍以上面的原始记录为准。
+
+## Technical guides / 技术文档
+
+| Topic | English | 简体中文 |
+|---|---|---|
+| Data pipeline | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/DATA_PIPELINE.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/DATA_PIPELINE.zh-CN.md) |
+| Vision encoder | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/VISION_ENCODER.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/VISION_ENCODER.zh-CN.md) |
+| Training budget | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/TRAINING_PLANNING_GUIDE.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/TRAINING_PLANNING_GUIDE.zh-CN.md) |
+| Training practices | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/TRAINING_TRICKS_GUIDE.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/TRAINING_TRICKS_GUIDE.zh-CN.md) |
+| Policy comparison | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/POLICY_COMPARISON_PROTOCOL.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/POLICY_COMPARISON_PROTOCOL.zh-CN.md) |
+| Deployment | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/DEPLOYMENT_OVERVIEW.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/docs/DEPLOYMENT_OVERVIEW.zh-CN.md) |
+| Artifact index | [English](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/artifacts_index.md) | [中文](https://github.com/alex7537/flow-matching-test-a2d-v2/blob/main/artifacts_index.zh-CN.md) |
