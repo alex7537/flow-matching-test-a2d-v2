@@ -115,11 +115,18 @@ Deployment is maintained in [`alex7537/fk-issac-logistics`](https://github.com/a
 
 ## Documentation
 
-- [Chinese technical record](README.zh-CN.md): full experiment history and implementation details
-- [Data pipeline](docs/DATA_PIPELINE.md): preprocessing, action labels, deduplication, padding, masks, and sampling
-- [Training planning](docs/TRAINING_PLANNING_GUIDE.md): epochs, optimizer steps, warmup, and learning rates
-- [Training practices](docs/TRAINING_TRICKS_GUIDE.md): monitoring, stability checks, and stopping decisions
-- [Vision encoder](docs/VISION_ENCODER.md): architecture, tensor shapes, spatial tokens, and CLS ablations
-- [Artifact index](artifacts_index.md): external checkpoints, bundles, and experiment outputs
+Start with the data and encoder guides, then deployment and the comparison protocol. Each guide has an English / Chinese switch at the top. English guides explain the key technical content; the Chinese versions retain the detailed historical and operational records.
+
+| Topic | English | 简体中文 | Contents |
+|---|---|---|---|
+| Data pipeline | [English](docs/DATA_PIPELINE.md) | [中文](docs/DATA_PIPELINE.zh-CN.md) | Schema, time alignment, normalization, V2/V3 labels, sampling |
+| Vision encoder | [English](docs/VISION_ENCODER.md) | [中文](docs/VISION_ENCODER.zh-CN.md) | Hybrid ViT, tensor shapes, spatial/CLS tokens |
+| Training budget | [English](docs/TRAINING_PLANNING_GUIDE.md) | [中文](docs/TRAINING_PLANNING_GUIDE.zh-CN.md) | Optimizer steps, warmup, LR, historical offline ablation |
+| Training practices | [English](docs/TRAINING_TRICKS_GUIDE.md) | [中文](docs/TRAINING_TRICKS_GUIDE.zh-CN.md) | Implemented techniques, proposed ablations, failure diagnosis |
+| Policy comparison | [English](docs/POLICY_COMPARISON_PROTOCOL.md) | [中文](docs/POLICY_COMPARISON_PROTOCOL.zh-CN.md) | Controlled rollout, metrics, inference settings |
+| Deployment | [English](docs/DEPLOYMENT_OVERVIEW.md) | [中文](docs/DEPLOYMENT_OVERVIEW.zh-CN.md) | Bundles, observation/action interface, closed-loop execution |
+| Artifact index | [English](artifacts_index.md) | [中文](artifacts_index.zh-CN.md) | Checkpoint identity, hashes, handoff and storage |
+
+[Chinese project record](README.zh-CN.md) · [Change log (Chinese)](CHANGE.md)
 
 Large datasets, checkpoints, local experiment logs, and deployment bundles are intentionally excluded from Git.

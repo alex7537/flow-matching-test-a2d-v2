@@ -1,260 +1,111 @@
-# A2D 数据处理管线部署方案
+# A2D Data Pipeline
 
-> 目标:将 `a2d_curobo_collect_run1/success` 下的原始 HDF5 抓取数据,转换为 flow matching policy 训练可用的高效数据管线。本文档面向执行 agent,包含全部背景、决策依据、部署步骤与验证清单。
+**English** | [简体中文](DATA_PIPELINE.zh-CN.md)
 
----
+This guide explains how raw robot demonstrations become efficient, versioned training samples. The original Chinese record includes historical deployment commands and machine-specific notes.
 
-## 1. 背景与核心问题
+## Scope and version boundaries
 
-### 1.1 原始数据
+The original plan began with roughly 200–370 episodes on an RTX 4090; later sections describe the 1,090-episode dataset. Those storage estimates and training counts are historical examples, not properties of every current dataset.
 
-- 单条 episode 一个 `.hdf5` 文件,约 546 MB,轨迹长度 ~133 步。
-- 训练硬件:单张 RTX 4090 (24GB),本地训练,数据总量 100–200 GB(约 200–370 条 episode,3–5 万帧)。
-- 训练目标:conditional flow matching policy,多相机观测 token 条件化,预测 action chunk(horizon=16)的关节指令。
-
-### 1.2 为什么不能直接在原始文件上训练
-
-原始 RGB 数据集的 HDF5 chunk 布局为 `chunks=(17, 60, 80, 1)` + LZF 压缩:
-
-- 时间维一个 chunk 跨 17 帧。随机读取单帧需解压覆盖该帧的全部 192 个 chunk(约 16 MB),取出 0.9 MB 有效数据,**读放大约 17 倍**;三相机单样本约 48 MB 解压量。
-- 训练分辨率 224×224,原始 480×640 中 87% 像素读入后即丢弃。
-- 结论:**必须离线预处理**,将图像 resize + JPEG 编码,重写为随机读取友好的布局。处理后总数据量约 3–5 GB,首个 epoch 后全部进入 Linux page cache,IO 瓶颈消失。
-
-### 1.3 原始 schema 关键字段(state/action 映射依据)
-
-| 原始路径 | 形状 | 语义 | 用途 |
-|---|---|---|---|
-| `trajectory/arm2_pos` | (T, 7) | 手臂关节实测值 | → state + action |
-| `trajectory/hand2_pos` | (T, 6) | 手部关节实测值 | → state + action |
-| `trajectory/arm2_pos_target` | (T, 7) | 稀疏手臂指令记录 | 仅审计 |
-| `trajectory/hand2_pos_target` | (T, 6) | 密集手部控制目标 | v3 action 后 6 维 |
-| `trajectory/waist_pos` | (T, 2) | 腰部关节 | 待定,见 §6 |
-| `trajectory/cameras/rgb_{head,left_hand,right_hand}` | (T, 480, 640, 3) uint8 | 三路可用 RGB | 通过 `--image-keys` 选择观测子集 |
-| `trajectory/cameras/depth_*` | (T, 480, 640) f32 | 深度 | 当前管线不用,见 §7 |
-| `trajectory/phase` | (T,) str | 22 种阶段标签 | 保留,用于分析/加权 |
-| `meta/success`, `grasp/quality_score` 等 | attrs | 质量元数据 | 保留在输出 attrs |
-
-**决策依据**:`arm2_pos_target` 是稀疏事件记录，不能直接作为逐帧标签；
-`hand2_pos_target` 在当前 1,090 条数据的 180,087 帧中没有全零占位行。
-legacy v1/v2 学习完整实际执行轨迹，v3 改为前 7 维实际手臂轨迹加后 6 维密集手部控制目标。
-
----
-
-## 2. 管线架构
-
-> **W&B 分级纪律:**分钟级调试/小数据 run 可在 A800 使用 `online` 实时上传，但 `WandbLogger` 必须在异常时只告警一次并永久降级为 no-op；长训固定以 `wandb==0.28.0` offline 落盘，再搬运到 psibot 用 `requirements.lock.wandb-sync.txt` 固定的 `wandb==0.27.0` 同步，并以 `scripts/verify_wandb_sync.py` 的服务端 run 存在性及 history 行数校验作为成功判据。A800 的 `HOME=$WORK/home` 位于共享 CFS，仅允许保存非敏感缓存并设为 `700`；online 密钥不得落入任何 `/share_data` 路径，只能由 TI-ONE Secret 注入或保存到容器本地 `/root/.secrets/wandb_api_key`（`600`）。
-
-```
-原始 success/*.hdf5  (100–200 GB, chunk 布局对随机读极不友好)
-        │
-        │  scripts/preprocess_a2d.py   ← 一次性,ProcessPool 并行
-        ▼
-处理后 a2d_processed/*.hdf5  (~3–5 GB, schema 归一化)
-        │    observations/qpos      (T, 13)  f32   arm2_pos ⊕ hand2_pos
-        │    observations/rgb_*     (T,)     vlen uint8 (jpeg, 224²)
-        │    action                 (T, 13)  f32   arm2_pos ⊕ hand2_pos
-        │    phase                  (T,)     vlen str
-        │    segment_type           (T,)     u8    static/continuous/keyframe
-        │    arm_keyframe           (T,)     u8    arm 关键帧掩码
-        │    attrs: segmentation_version / thresholds / action semantics
-        │
-        │  python a2d_dataset.py --compute-stats   ← 一次性
-        ▼
-index_cache.json + norm_stats.json  (绑定 train episode 内容哈希的 min/max 统计)
-        │
-        │  src/data/a2d_dataset.py :: build_dataloaders(cfg)
-        ▼
-train_loader / val_loader
-     · episode 级 train/val 切分(固定 seed,防相邻帧泄漏)
-     · 每 worker 惰性打开 h5 句柄(fork 安全)
-     · action chunk 尾部 padding + action_mask
-     · 图像增强仅 train(pad-crop 抖动 + color jitter)
-     · state/action 按 train min/max 归一化到 [-1, 1](clip ±3)
-```
-
-## 3. 文件清单与仓库落位
-
-| 文件 | 建议落位 | 作用 |
+| Contract | Observation state | Action label |
 |---|---|---|
-| `preprocess_a2d.py` | `scripts/preprocess_a2d.py` | 原始 → 训练格式的一次性转换 |
-| `a2d_dataset.py` | `flow_matching_test/a2d_dataset.py` | Dataset / DataLoader / 归一化 / 索引 / stats CLI |
-| 本文档 | `docs/DATA_PIPELINE.md` | 方案说明 |
+| Legacy V1/V2 | 7 actual arm + 6 actual hand joint positions | 7 actual arm + 6 actual hand joint positions |
+| V3 hybrid | Same 13-D actual joint state | 7 actual arm + 6 commanded hand-joint targets |
 
-两个脚本均已存在(与本文档同批交付),无需重写;落位后仅需按 §6 核对待确认项。
+V3 is the contract described by the current project overview. Do not mix V2 labels, statistics, checkpoints, or deployment settings with V3. The sparse arm target log is not used as dense action supervision.
 
-## 4. 部署步骤
+## End-to-end flow
 
-```bash
-# ── 推荐:审计门禁 + quarantine + 预处理 + manifest + stats ──
-python scripts/ingest_a2d.py \
-    --src /path/to/raw_rgb_episodes \
-    --output-root /path/to/datasets \
-    --dataset-version a2d_rgb_complete_v1 \
-    --admission complete-lift \
-    --image-keys rgb_head rgb_right_hand --workers 4
-
-# ── 0. 依赖 ──────────────────────────────────────────────
-pip install h5py opencv-python numpy torch
-pip install PyTurboJPEG   # 可选,jpeg 解码提速 2–4 倍,需系统 libturbojpeg
-
-# ── 1. 离线预处理(一次性,4 进程约 1–2 小时)──────────────
-python scripts/preprocess_a2d.py \
-    --src /home/psibot/Downloads/flow-matching-test/a2d_curobo_collect_run1/success \
-    --dst /home/psibot/data/a2d_processed \
-    --image-keys rgb_head rgb_right_hand \
-    --image-size 224 --jpeg-quality 92 --workers 4
-# 若 §6 确认腰部会动,追加 --include-waist
-# 改变 --image-keys 时请使用新的 --dst；脚本会拒绝复用视角配置不同的旧产物。
-
-# ── 2. 建索引 + 归一化统计(一次性)────────────────────────
-python -m flow_matching_test.a2d_dataset \
-    --data-dir /home/psibot/data/a2d_processed \
-    --image-keys rgb_head rgb_right_hand --compute-stats \
-    --motion-threshold 1e-4 --keyframe-threshold 0.1
-
-# ── 3. 训练代码接入 ──────────────────────────────────────
-# from src.data.a2d_dataset import A2DConfig, build_dataloaders
-# cfg = A2DConfig(data_dir="/home/psibot/data/a2d_processed", ...)
-# train_loader, val_loader, norm_stats = build_dataloaders(cfg)
+```mermaid
+flowchart TD
+    A["Raw episode HDF5: RGB, joints, phase, metadata"] --> B["Admission and alignment audit"]
+    B --> C["Resize / JPEG encoding / processed HDF5"]
+    C --> D["Versioned deduplication and V3 label derivation"]
+    D --> E["Episode split + train-only statistics + manifests"]
+    E --> F["Dataset: history, future action chunks, masks"]
+    F --> G["Training loader: augmentation and optional oversampling"]
+    F --> H["Validation loader: original distribution and fixed sampling"]
 ```
 
-训练 yaml 相对现状需要的改动:
+## Why preprocess?
 
-```yaml
-data:
-  data_dir: /home/psibot/data/a2d_processed   # 指向处理后目录
-  image_keys: [rgb_head, rgb_right_hand]  # 从可用视角中选择任意非空子集
-training:
-  device: cuda        # 现为 cpu(冒烟配置)
-  batch_size: 16      # 4090 + ViT-S 全参数微调起点；先实测 1-2 batch 再提高
-  num_workers: 8      # 现为 0;盯 GPU 利用率不足再加到 12–16
-  pin_memory: true
-```
+The historical raw RGB layout used LZF-compressed chunks spanning 17 frames. Reading one random frame therefore decompressed substantially more data than the sample needed. Training at 224 × 224 also discarded much of the original 640 × 480 image.
 
-## 5. 关键设计决策(勿随意更改)
+The preprocessing route resizes images and stores each frame as a JPEG byte array in a variable-length HDF5 dataset. It preserves episode structure, joint data, phases, and relevant metadata. The original 3–5 GB output estimate applies to the early dataset plan; it is not a guaranteed size for later datasets.
 
-1. **episode 级 train/val 切分**,固定 seed。同轨迹相邻帧高度相似,按 sample 切分会造成 val 泄漏、val loss 假低。
-2. **归一化统计仅在 train episodes 上计算**,绝对 state/action 使用逐维 min/max 映射到 [-1, 1],常量维度有 `range_eps=1e-4` 保护。
-3. **`norm_stats.json` 保存排序后的 train episode 内容哈希列表及摘要**；Dataset 按实际 split 重算摘要并硬校验，checkpoint 同时内嵌 normalizer 与摘要。
-4. **h5 句柄绝不在主进程打开后 fork**。Dataset 内每个 worker 首次 `__getitem__` 时惰性打开自己的句柄(`_handles` dict)。这是 hdf5 + `num_workers>0` 的经典崩溃/静默错误来源。
-5. **action chunk 尾部 padding**:episode 末尾不足 horizon 时重复末帧,并返回 `action_mask`;训练 loss 建议乘以 mask。
-6. **预处理输出先写 `.tmp` 再 rename**,中断可安全重跑(已存在的输出自动跳过,幂等)。
-7. **train 对包含 arm 实际位置变化点的窗口做可配置过采样，val 始终保持原始窗口分布**。
-8. **模型默认将归一化后的 13 维当前 joint state 编码为 proprio condition token**。
-9. **分段在预处理阶段物化**：processed HDF5 保存 `segmentation_version`、阈值、`segment_type` 与 `arm_keyframe`，Dataset 只读取并校验版本，不在线重判。
-10. **数据集版本不可原地改写 stats**：train 成员变化后创建新数据目录或使用新的 `--norm-stats` 文件名，旧 checkpoint 继续绑定旧摘要。
-11. **动作窗口默认向未来偏移一帧**：`obs[t] → action[t+1:t+1+H]`；窗口完整性过滤、关键帧窗口标签与过采样使用同一偏移范围。旧 checkpoint 缺少 `action_offset_steps` 时按 `0` 解释。
+## Important fields
 
-### 精确重复 joint frame 的派生过滤层
+| Source | Meaning / processed role |
+|---|---|
+| `trajectory/arm2_pos` | Actual arm joints, `[T,7]`; observation and arm action label |
+| `trajectory/hand2_pos` | Actual hand joints, `[T,6]`; observation and legacy action label |
+| `trajectory/hand2_pos_target` | Dense commanded hand targets; V3 hand action label |
+| `trajectory/arm2_pos_target` | Sparse arm command events; audit only |
+| `trajectory/cameras/rgb_*` | Available head/hand views; selected by `image_keys` |
+| `trajectory/phase` | Phase labels retained for analysis and sampling |
+| `trajectory/waist_pos` | Optional state extension requiring a motion audit |
+| Depth streams | Not used by the baseline RGB-only data route |
 
-需要移除全 13 维 executed joint position 完全相等的相邻帧时，必须生成新数据版本，
-不可原地修改已有 HDF5：
+Processed files contain `observations/qpos`, selected `observations/rgb_*`, `action`, `phase`, `segment_type`, `arm_keyframe`, and version/semantic attributes.
 
-```bash
-python scripts/filter_exact_duplicate_joint_frames.py \
-  --source data-rgb-450gb-v1 \
-  --destination data-rgb-450gb-v2-exact-dedup-keep-last \
-  --data-version a2d_450gb_rgb_v2_exact_dedup_keep_last
-```
+## Split, normalization, and indexing
 
-过滤规则为：若 `action[t] == action[t+1]` 的 13 个 float 值完全相等，则删除 `t`、
-保留 `t+1`，从而保留 phase 转换后的标签（例如末尾 `lift-servo → lift` 中的
-`lift`）。图像、qpos、action 和 phase 使用同一个 frame mask，随后重新计算
-segmentation、train-only normalization、dataset manifest 和 split manifest。
-`L2 <= 1e-4` 的近似不变帧不在此过滤范围内。
+- Split by **episode**, with a fixed seed, to prevent near-identical neighboring frames leaking into validation.
+- Compute per-dimension min/max statistics only from training episodes. Map state/action to `[-1,1]`, protect constant dimensions with `range_eps=1e-4`, and use the documented range guard.
+- Bind statistics to sorted training-episode content hashes. Dataset loading checks the digest; checkpoints carry the normalizer and provenance.
+- Each worker opens HDF5 handles lazily. Do not open shared HDF5 handles in the parent and then fork.
+- Write preprocessing outputs to temporary files before renaming. A changed camera selection or dataset contract requires a separate output version.
+- Materialize segmentation labels and thresholds during preprocessing; the Dataset reads and validates them rather than redefining them online.
 
-### v3 手部控制目标语义
-
-v2 的 `action` 与 `observations/qpos` 都是
-`arm2_pos(7)+hand2_pos(6)`。部署却把 policy 后 6 维输出作为手部控制目标，
-导致模型把接触、负载和跟踪滞后造成的实际手指变化重新发给控制器。v3 改为：
+## Time alignment and tail masks
 
 ```text
-observation/qpos = arm2_pos(7) + hand2_pos(6)
-action           = arm2_pos(7) + hand2_pos_target(6)
-action_semantics = arm_executed_hand_commanded_joint_position
+observation at t -> action[t+1 : t+1+H]
+default H = 16, action_offset_steps = 1
 ```
 
-从现有 exact-dedup v2 派生 v3 时复用已经压缩的 RGB，只从原始 HDF5 读取
-`hand2_pos_target`，并严格验证 v2 qpos 与原始数据按 executed-qpos keep-last mask
-得到的时间线一致：
+An older checkpoint without an explicit offset is interpreted as legacy offset 0. That is a compatibility distinction, not permission to mix the two timelines.
+
+In complete-window mode, keep samples satisfying `t + offset + H <= episode_length`. With `include_tail_padded_windows: true`, keep tail observations that still have at least one future action, repeat the final action for padding, and return `action_mask [B,H]`. Loss and sampled-action MSE count only real timesteps.
+
+Transition/lift oversampling changes the **training index**, not the underlying trajectory duration. Validation keeps its original distribution. The historical tail-padded 1,090-episode example with transition/lift factors of 2 has 220,026 effective training samples and 6,876 batches per epoch at batch size 32.
+
+## Deduplication and V3 derivation
+
+Exact deduplication compares all 13 actual joint values in consecutive frames. If they are identical, remove the earlier frame and keep the later one, preserving the later phase label. Apply the same frame mask to images, state, actions, and phases. This is not a near-static threshold filter.
+
+V3 derivation reuses compressed RGB from V2, reads hand targets from the raw source, verifies timeline correspondence against the executed-joint keep-last mask, preserves episode membership, and recomputes action statistics and manifests. Deduplication and segmentation remain based on actual joint state, not the hybrid action label. The recorded V2→V3 transition calls for training V3 from scratch.
+
+## Operational entry points
+
+Start with the admission/manifest workflow:
 
 ```bash
-python scripts/create_hybrid_hand_target_dataset.py \
-  --source data-rgb-450gb-v2-exact-dedup-keep-last \
-  --raw-root a2d-450GB \
-  --destination data-rgb-450gb-v3-arm-executed-hand-commanded-keep-last \
-  --data-version a2d_450gb_rgb_v3_arm_executed_hand_commanded_keep_last
+python scripts/ingest_a2d.py \
+  --src /path/to/raw_rgb_episodes \
+  --output-root /path/to/datasets \
+  --dataset-version a2d_rgb_complete_v1 \
+  --admission complete-lift \
+  --image-keys rgb_head rgb_right_hand --workers 4
 ```
 
-新版本继承原 split 的完整 episode 成员，重新计算 action normalization、内容哈希和
-manifest。精确去重和 segmentation 始终基于实际 `observations/qpos`，不基于 hybrid
-action。v2 checkpoint 不得 resume 到 v3，v3 必须从头训练。
+For a direct preprocessing or derived-dataset workflow, see:
 
-### episode 尾部 lift window
+- [Preprocessor](../scripts/preprocess_a2d.py)
+- [Dataset and statistics](../flow_matching_test/a2d_dataset.py)
+- [Exact duplicate filter](../scripts/filter_exact_duplicate_joint_frames.py)
+- [V3 hybrid-label derivation](../scripts/create_hybrid_hand_target_dataset.py)
+- [Alignment audit](../scripts/check_data_alignment.py)
 
-默认的完整窗口模式只保留满足
-`t + action_offset_steps + action_horizon <= episode_length` 的样本。这样不会把
-padding 误当成真值，但会让每条 episode 的最后 `action_horizon` 帧无法作为
-observation。对于 lift 位于轨迹末尾的数据，可显式开启：
+These are alternative/staged entry points; do not blindly execute every conversion against an existing dataset version. Use separate destinations and matching configuration files.
 
-```yaml
-data:
-  include_tail_padded_windows: true
-  lift_oversample_factor: 2
-```
+## Checks and open questions
 
-开启后，Dataset 保留仍有至少一个未来 action 的尾部 observation，将不足
-`action_horizon` 的部分重复最后一个真实 action，并返回 `action_mask`。CFM、
-Diffusion 和 IMLE 的训练 loss 及 validation sampled-action MSE 都只统计 mask
-为 1 的真实 timestep。窗口的未来 phase 中包含 `lift` 时返回 `is_lift=true`，
-仅在 train split 按 `lift_oversample_factor` 增采样，并记录 `lift_loss` 与
-`lift_sample_action_mse`。
+Check episode counts, schema, image keys, action semantics, split/statistics digests, and one real batch before a training run. Verify dataloader throughput separately from model throughput. With no timestamps, the alignment audit can confirm indexed lengths but must report physical time alignment as `not_verifiable`.
 
-该开关会改变 samples/epoch 和 LR schedule 的总 step，不得用于原 optimizer
-checkpoint 的直接 resume；如从旧模型继续，应使用 model-only `init_from`，
-重新建立 optimizer、warmup 和 cosine schedule。当前 1090-episode v2 数据在
-`transition=2x`、`lift=2x` 下为 220,026 个有效 train samples，即 batch size 32
-时 6,876 steps/epoch。
+Waist motion, acquisition/control frequency, and the physical duration represented by 16 steps still require verification for each setup. Adding depth is a new modality with its own preprocessing, normalization, synchronization, and deployment contract.
 
-## 6. 待确认项(部署前必须核对)
+Local metrics, checkpoints, and provenance remain authoritative even when W&B synchronization fails. Historical W&B version pins and environment-specific synchronization procedures are retained in the [Chinese operational record](DATA_PIPELINE.zh-CN.md).
 
-- [ ] **waist_pos 是否进 state**:读若干 episode 检查 `trajectory/waist_pos` 的 std。接近 0 → 不加;明显变化 → 预处理加 `--include-waist`(它影响相机视角与手臂基座,不可忽略)。
-- [x] **action 契约**:固定为实际执行的 `arm2_pos(7)+hand2_pos(6)=13` 维，Dataset 建索引时校验 shape、layout 与 semantics。
-- [ ] **控制频率与 horizon**:确认采集频率,horizon=16 对应的物理时长是否覆盖一个有意义的动作片段。
-
-## 7. 已知取舍与后续扩展
-
-- **depth 未纳入**(占原始体积近一半,当前管线纯 RGB)。鉴于系统存在空间深度感知的失败模式,后续若加 depth 输入分支:在 `preprocess_a2d.py` 中补充 depth 读取(建议 resize + float16 + 每帧独立 chunk),重跑预处理即可,无需重新采集。
-- **phase 标签已保留**:可用于 (a) 按阶段分解 val 误差(预期 pregrasp 易学、finger squeeze/guarded settle 等精细阶段难学);(b) 阶段加权采样。
-- **数据量偏少的风险**:3–5 万帧、疑似单一物体。缓解手段优先级:冻结预训练 backbone > 加强图像增强 > 收集更多样化数据(检查 meta 中 `disturbance_shift_m` / `sample_angle_deg` 评估现有多样性)。
-- **验证协议**(与数据管线配套):val loss 计算需固定 noise 与 t 的采样 seed 才具备 checkpoint 间可比性;每隔数千步跑一次完整 ODE 采样(10 步 Euler)的 action MSE 作为更接近推理行为的指标;checkpoint 选择最终以 rollout 成功率为准;使用 EMA 权重(decay≈0.999)评估与部署。
-
-## 8. 验证清单(部署后逐项执行)
-
-```bash
-# 0. 时间/结构对齐审计。没有 timestamp 时只能确认索引长度一致，报告会明确标记 not_verifiable。
-python scripts/check_data_alignment.py \
-    --data-dir /path/to/raw_episodes \
-    --image-keys rgb_head rgb_right_hand \
-    --output alignment_report.json
-
-# 1. 预处理产物完整性:episode 数量一致、总大小符合预期(~3–5 GB)
-ls /home/psibot/data/a2d_processed/*.hdf5 | wc -l
-
-# 2. 单文件 schema 抽查
-python -c "
-import h5py
-f = h5py.File(sorted(__import__('glob').glob('/home/psibot/data/a2d_processed/*.hdf5'))[0])
-f.visit(print); print(dict(f.attrs))"
-
-# 3. Dataset 冒烟:取一个 batch,检查形状与数值范围
-#    images (B, 3*history, 3, 224, 224) ∈ [0,1]
-#    state  (B, 13*history)  大致 ∈ [-1,1]
-#    action (B, 16, 13)      大致 ∈ [-1,1](若大量贴 ±3 边界 → stats 有误)
-#    action_mask (B, 16)
-
-# 4. 吞吐验证:纯 dataloader 迭代速度应 > 训练前向所需吞吐
-# 5. 训练中:watch -n1 nvidia-smi,GPU 利用率 < 80% → 先查 jpeg 解码
-#    (装 PyTurboJPEG)与 num_workers,而不是改模型
-```
+Next: [Vision encoder](VISION_ENCODER.md) · [Training budget](TRAINING_PLANNING_GUIDE.md) · [Deployment](DEPLOYMENT_OVERVIEW.md)

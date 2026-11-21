@@ -45,7 +45,7 @@ d_model=384, n_head=4
 连续 action chunk [16,13]
 ```
 
-`7×7` 是图像二维特征网格，不是分割结果或机器人 XYZ 空间；49表示空间位置数，384才是每个位置的特征维度。ViT 内部同时存在 CLS，但默认 `spatial` 路线在完整 ViT 处理后丢弃 CLS。CLS 消融改为每路只传1个全局 token，因此 condition 从99降为3；ViT 内部仍会计算所有 patch。完整形状、代码入口和替代 encoder 边界见 [`docs/VISION_ENCODER.md`](docs/VISION_ENCODER.md)。
+`7×7` 是图像二维特征网格，不是分割结果或机器人 XYZ 空间；49表示空间位置数，384才是每个位置的特征维度。ViT 内部同时存在 CLS，但默认 `spatial` 路线在完整 ViT 处理后丢弃 CLS。CLS 消融改为每路只传1个全局 token，因此 condition 从99降为3；ViT 内部仍会计算所有 patch。完整形状、代码入口和替代 encoder 边界见 [`docs/VISION_ENCODER.md`](docs/VISION_ENCODER.zh-CN.md)。
 
 数据侧共同使用 exact-dedup keep-last、tail padding + `action_mask`、train-only transition/lift oversampling、episode-level split、deterministic validation、EMA、watchdog 和原子 checkpoint。
 
@@ -225,8 +225,21 @@ failure.json（仅失败时）
 ## 文档
 
 - [`CHANGE.md`](CHANGE.md)：倒序更新记录；
-- [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.md)：JPEG 预处理、V3 action、dedup、padding、mask 与 sampling；
-- [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.md)：epochs、steps、warmup 与 LR；
-- [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.md)：训练技巧、监控与停止判断；
-- [`docs/VISION_ENCODER.md`](docs/VISION_ENCODER.md)：Hybrid ViT、ResNet特征图、spatial/CLS token与替代视觉encoder合同；
-- [`artifacts_index.md`](artifacts_index.md)：外部 checkpoint、bundle 与实验产物索引。
+- [`docs/DATA_PIPELINE.md`](docs/DATA_PIPELINE.zh-CN.md)：JPEG 预处理、V3 action、dedup、padding、mask 与 sampling；
+- [`docs/TRAINING_PLANNING_GUIDE.md`](docs/TRAINING_PLANNING_GUIDE.zh-CN.md)：epochs、steps、warmup 与 LR；
+- [`docs/TRAINING_TRICKS_GUIDE.md`](docs/TRAINING_TRICKS_GUIDE.zh-CN.md)：训练技巧、监控与停止判断；
+- [`docs/VISION_ENCODER.md`](docs/VISION_ENCODER.zh-CN.md)：Hybrid ViT、ResNet特征图、spatial/CLS token与替代视觉encoder合同；
+- [`artifacts_index.md`](artifacts_index.zh-CN.md)：外部 checkpoint、bundle 与实验产物索引。
+
+
+## 双语技术文档
+
+| 内容 | English | 简体中文 |
+|---|---|---|
+| Data pipeline | [English](docs/DATA_PIPELINE.md) | [中文](docs/DATA_PIPELINE.zh-CN.md) |
+| Vision encoder | [English](docs/VISION_ENCODER.md) | [中文](docs/VISION_ENCODER.zh-CN.md) |
+| Training budget | [English](docs/TRAINING_PLANNING_GUIDE.md) | [中文](docs/TRAINING_PLANNING_GUIDE.zh-CN.md) |
+| Training practices | [English](docs/TRAINING_TRICKS_GUIDE.md) | [中文](docs/TRAINING_TRICKS_GUIDE.zh-CN.md) |
+| Policy comparison | [English](docs/POLICY_COMPARISON_PROTOCOL.md) | [中文](docs/POLICY_COMPARISON_PROTOCOL.zh-CN.md) |
+| Deployment | [English](docs/DEPLOYMENT_OVERVIEW.md) | [中文](docs/DEPLOYMENT_OVERVIEW.zh-CN.md) |
+| Artifact index | [English](artifacts_index.md) | [中文](artifacts_index.zh-CN.md) |
