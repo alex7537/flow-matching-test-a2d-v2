@@ -1,6 +1,6 @@
 # A2D Continuous-Action Policy Research（中文技术文档）
 
-[English project overview](README.md)
+[English](README.md) | **简体中文**
 
 本仓库围绕 A2D 机器人抓取任务比较原生连续动作策略（Conditional Flow Matching、Diffusion Policy、IMLE）、视频辅助训练、Joint WAM和RDT迁移路线。共同目标是从视觉与机器人状态生成可部署的连续关节动作。
 
