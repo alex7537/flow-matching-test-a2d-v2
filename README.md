@@ -1,6 +1,8 @@
 # Generative Robot Policies for A2D Manipulation
 
-[Rollout examples](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/docs/grasp-success-gallery) · [中文技术文档](README.zh-CN.md) · [Data pipeline](docs/DATA_PIPELINE.md) · [Vision encoder](docs/VISION_ENCODER.md) · [Change log](CHANGE.md)
+**English** | [简体中文](README.zh-CN.md)
+
+[Rollout examples](https://github.com/alex7537/flow-matching-test-a2d-v2/tree/docs/grasp-success-gallery) · [Data pipeline](docs/DATA_PIPELINE.md) · [Vision encoder](docs/VISION_ENCODER.md) · [Change log](CHANGE.md)
 
 This repository studies **continuous robot action generation from visual observations and robot state**. It provides a shared training and deployment contract for comparing Conditional Flow Matching, Diffusion Policy, IMLE, video-assisted learning, Joint World Action Models, and an RDT-170M transfer route.
 
