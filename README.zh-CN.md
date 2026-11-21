@@ -1,5 +1,7 @@
 # Flow Matching Test
 
+[English](README.md) | **简体中文**
+
 基于 A2D 机器人抓取数据训练连续关节动作策略。当前主线是双 RGB、可选 proprio 条件的 Flow Matching，输出未来 16 步绝对 joint action。
 
 ## 100 次成功抓取展示（自动循环）
