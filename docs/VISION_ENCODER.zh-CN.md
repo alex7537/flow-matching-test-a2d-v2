@@ -1,6 +1,6 @@
 # A2D视觉编码器：从双RGB到condition tokens
 
-[English](VISION_ENCODER.zh-CN.md) | **简体中文**
+[English](VISION_ENCODER.md) | **简体中文**
 
 本文只描述基础 action-only CFM/DP/IMLE 共用的视觉 observation 路线，不包含 Joint WAM 的9帧 Wan视频latent。
 

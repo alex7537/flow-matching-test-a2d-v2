@@ -1,6 +1,6 @@
 # 模仿学习策略训练技巧与实验路线指南
 
-[English](TRAINING_TRICKS_GUIDE.zh-CN.md) | **简体中文**
+[English](TRAINING_TRICKS_GUIDE.md) | **简体中文**
 
 本文档是本仓库 CFM、RS-IMLE 与 Diffusion 策略的训练实践指南，适用于 ViT
 视觉编码器、13-DOF 动作空间（`arm2_pos(7) + hand2_pos(6)`）、A800 训练和

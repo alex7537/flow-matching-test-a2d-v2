@@ -1,6 +1,6 @@
 # 训练预算与学习率规划指南
 
-[English](TRAINING_PLANNING_GUIDE.zh-CN.md) | **简体中文**
+[English](TRAINING_PLANNING_GUIDE.md) | **简体中文**
 
 这份文档用于回答一个核心问题：当数据量、batch size 或模型可训练参数发生变化时，应该如何重新设置 epochs、steps、warmup 和学习率，而不是机械沿用旧配置。
 

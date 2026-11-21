@@ -1,6 +1,6 @@
 # Artifact Index
 
-[English](artifacts_index.zh-CN.md) | **简体中文**
+[English](artifacts_index.md) | **简体中文**
 
 重要训练、评估与部署产物的本体不进入 Git；本文件只登记其位置、SHA-256 与代码血统。文件经过移动或复制后必须重新执行 SHA-256 校验，位置失效时应及时更新本索引。
 

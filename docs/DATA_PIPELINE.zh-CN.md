@@ -1,6 +1,6 @@
 # A2D 数据处理管线部署方案
 
-[English](DATA_PIPELINE.zh-CN.md) | **简体中文**
+[English](DATA_PIPELINE.md) | **简体中文**
 
 > 目标:将 `a2d_curobo_collect_run1/success` 下的原始 HDF5 抓取数据,转换为 flow matching policy 训练可用的高效数据管线。本文档面向执行 agent,包含全部背景、决策依据、部署步骤与验证清单。
 

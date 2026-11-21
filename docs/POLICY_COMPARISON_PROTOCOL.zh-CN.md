@@ -1,6 +1,6 @@
 # CFM / RS-IMLE / Diffusion 公平对比协议
 
-[English](POLICY_COMPARISON_PROTOCOL.zh-CN.md) | **简体中文**
+[English](POLICY_COMPARISON_PROTOCOL.md) | **简体中文**
 
 ## 目的与启动条件
 
